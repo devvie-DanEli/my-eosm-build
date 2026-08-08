@@ -2358,6 +2358,12 @@ static CONFIG_INT("lv.sat", preview_saturation, 0);         // range: -2:2, 3 sp
 
 static CONFIG_INT("lv.crazy", preview_crazy, 0);         // range: 0:2
 static CONFIG_INT("lv.peak", preview_peaking, 0);        // range: 0:2
+static CONFIG_INT("lv.peak.auto.diso", digic_peak_auto_edge_on_dualiso, 0); // auto-switch Digic Peaking to Edge Image while shooting Dual ISO
+
+/* Resolved lazily from the dual_iso module; NULL (and harmlessly skipped)
+ * if that module isn't loaded. Must be named exactly like the module
+ * symbol for MODULE_FUNCTION() to wire it up correctly. */
+static int (*dual_iso_is_active)() = MODULE_FUNCTION(dual_iso_is_active);
 
 CONFIG_INT("bmp.color.scheme", bmp_color_scheme, 0);
 
@@ -2417,6 +2423,20 @@ static void preview_contrast_n_saturation_step()
     int preview_peaking_force_normal_image =
         halfshutter_pressed ||                                  /* show normal image on half-hutter press */
         get_ms_clock() < peaking_hs_last_press + 500;     /* and keep it at least 500ms (avoids flicker with fast toggling) */
+
+    /* Effective peaking mode actually rendered on screen this cycle.
+     * Normally identical to the user's saved "Digic Peaking" menu choice.
+     * When "Auto Edge (Dual ISO)" is on and Dual ISO is actively shooting,
+     * temporarily force Edge Image for the live render only -- the saved
+     * menu value (preview_peaking) is never touched, so this reverts on
+     * its own the moment Dual ISO turns off. */
+    int digic_peak_effective = preview_peaking;
+    if (digic_peak_auto_edge_on_dualiso &&
+        dual_iso_is_active && dual_iso_is_active() &&
+        !preview_peaking_force_normal_image)
+    {
+        digic_peak_effective = 2;
+    }
 #endif
     
 #ifdef FEATURE_LV_SATURATION
@@ -2439,9 +2459,9 @@ static void preview_contrast_n_saturation_step()
         desired_saturation = 0;
     
     #ifdef FEATURE_DIGIC_FOCUS_PEAKING
-    if (preview_peaking == 2 && !preview_peaking_force_normal_image)
+    if (digic_peak_effective == 2 && !preview_peaking_force_normal_image)
         desired_saturation = 0;
-    else if (preview_peaking == 3 && !preview_peaking_force_normal_image)
+    else if (digic_peak_effective == 3 && !preview_peaking_force_normal_image)
         desired_saturation = 0x40;
     #endif
 
@@ -2495,7 +2515,7 @@ static void preview_contrast_n_saturation_step()
     }
 
     #ifdef FEATURE_DIGIC_FOCUS_PEAKING
-    if ((preview_peaking == 2 || preview_peaking == 3) && !preview_peaking_force_normal_image)
+    if ((digic_peak_effective == 2 || digic_peak_effective == 3) && !preview_peaking_force_normal_image)
         desired_contrast = contrast_values_at_brigthness_2[4];
     #endif
 
@@ -2532,16 +2552,16 @@ static void preview_contrast_n_saturation_step()
     int current_filter_value = (int) shamem_read(filter_register);
     int desired_filter_value = 
         gui_menu_shown() && !menu_active_but_hidden() ? 0 :
-        preview_peaking == 1 || (preview_peaking > 1 && preview_peaking_force_normal_image) ? 0x4d4 :
-        preview_peaking == 2 || preview_peaking == 3 ? 0x4c0 :
-        preview_peaking;
+        digic_peak_effective == 1 || (digic_peak_effective > 1 && preview_peaking_force_normal_image) ? 0x4d4 :
+        digic_peak_effective == 2 || digic_peak_effective == 3 ? 0x4c0 :
+        digic_peak_effective;
 
-    if (preview_peaking || filter_dirty)
+    if (digic_peak_effective || filter_dirty)
     {
         if (current_filter_value != desired_filter_value)
         {
             EngDrvOutLV(filter_register, desired_filter_value);
-            filter_dirty = preview_peaking;
+            filter_dirty = digic_peak_effective;
         }
     }
 #endif
@@ -3446,6 +3466,10 @@ static MENU_UPDATE_FUNC(slim_digic_peaking_update)
     if (preview_peaking > 2)
         preview_peaking = 2;
 
+    /* This is a 3-way selector (OFF/ON/Edge Image), not a plain toggle,
+     * so the slim UI's "hide non-bool entries at value 0" rule would
+     * otherwise lock this row whenever it's set to OFF. Force it to
+     * always stay navigable. */
     MENU_SET_ENABLED(1);
 }
 
@@ -3460,6 +3484,15 @@ static struct menu_entry custom_display_menus[] = {
         .choices = CHOICES("OFF", "ON", "Edge Image"),
         .edit_mode = EM_INLINE_ADJUST,
         .help  = "Focus peaking via DIGIC. ON = slightly sharper filter, Edge Image = pure edge overlay.",
+        .depends_on = DEP_LIVEVIEW,
+    },
+    {
+        .name = "Auto Edge (Dual ISO)",
+        .priv = &digic_peak_auto_edge_on_dualiso,
+        .max = 1,
+        .choices = CHOICES("OFF", "ON"),
+        .edit_mode = EM_INLINE_ADJUST,
+        .help  = "Automatically switches Digic Peaking to Edge Image while shooting Dual ISO. Reverts on its own when Dual ISO turns off.",
         .depends_on = DEP_LIVEVIEW,
     },
     #endif
