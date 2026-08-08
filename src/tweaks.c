@@ -3445,6 +3445,8 @@ static MENU_UPDATE_FUNC(slim_digic_peaking_update)
 {
     if (preview_peaking > 2)
         preview_peaking = 2;
+
+    MENU_SET_ENABLED(1);
 }
 
 static struct menu_entry custom_display_menus[] = {
