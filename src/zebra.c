@@ -80,6 +80,7 @@ extern int kill_canon_gui_mode;
 
 
 static void waveform_init();
+static void clrscr_mirror(void);
 //~ static void histo_init();
 static void do_disp_mode_change();
 static void show_overlay();
@@ -2164,7 +2165,23 @@ draw_zebra_and_focus( int Z, int F )
     uint8_t * const bvram = bmp_vram_real();
     if (unlikely(!bvram)) return 0;
     if (unlikely(!bvram_mirror)) return 0;
-    
+
+    /* KILL Zebras/FP (Dual ISO Rec): the moment either gets killed, wipe
+     * whatever was already drawn so it doesn't sit frozen on screen -
+     * draw_zebras()/focus peaking simply stop being called while killed,
+     * they don't erase their own old pixels. */
+    #if defined(CONFIG_MOVIE) && (defined(FEATURE_ZEBRA) || defined(FEATURE_FOCUS_PEAK))
+    {
+        static int was_killed = 0;
+        int killed_now = zebra_killed_by_dual_iso_rec() || focus_peaking_killed_by_dual_iso_rec();
+        if (killed_now && !was_killed)
+        {
+            clrscr_mirror();
+        }
+        was_killed = killed_now;
+    }
+    #endif
+
     #ifdef FEATURE_ZEBRA
     draw_zebras(Z);
     #endif
