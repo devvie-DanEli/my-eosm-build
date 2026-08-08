@@ -40,6 +40,7 @@
 #include "focus.h"
 #include "lvinfo.h"
 #include "powersave.h"
+#include "module.h"
 
 #include "imgconv.h"
 #include "falsecolor.h"
@@ -307,6 +308,32 @@ int nondigic_zoom_overlay_enabled()
         should_draw_zoom_overlay();
 }
 
+/* used to detect whether Dual ISO is currently enabled, without
+ * hard-linking against the dual_iso module (it may not be loaded) */
+static int (*dual_iso_is_enabled_fn)() = MODULE_FUNCTION(dual_iso_is_enabled);
+
+/* "KILL FP/Zebras (Dual ISO Rec)": while recording, if Dual ISO is
+ * enabled, temporarily hide focus peaking / zebras; restore them
+ * automatically once recording stops. Has no effect if Dual ISO
+ * is off. These are independent from each other. */
+static CONFIG_INT("kill.zebra.dualiso.rec", kill_zebra_dual_iso_rec, 0);
+static CONFIG_INT("kill.fp.dualiso.rec", kill_fp_dual_iso_rec, 0);
+
+static int dual_iso_currently_enabled()
+{
+    return dual_iso_is_enabled_fn && dual_iso_is_enabled_fn();
+}
+
+static int zebra_killed_by_dual_iso_rec()
+{
+    return kill_zebra_dual_iso_rec && RECORDING && dual_iso_currently_enabled();
+}
+
+static int focus_peaking_killed_by_dual_iso_rec()
+{
+    return kill_fp_dual_iso_rec && RECORDING && dual_iso_currently_enabled();
+}
+
 static CONFIG_INT( "focus.peaking", focus_peaking, 0);
 //~ static CONFIG_INT( "focus.peaking.method", focus_peaking_method, 1);
 static CONFIG_INT( "focus.peaking.filter.edges", focus_peaking_filter_edges, 0); // prefer texture details rather than strong edges
@@ -323,7 +350,7 @@ static CONFIG_INT( "focus.peaking.disp", focus_peaking_disp, 0); // display as d
 int focus_peaking_as_display_filter() 
 {
     #if defined(CONFIG_DISPLAY_FILTERS) && defined(FEATURE_FOCUS_PEAK_DISP_FILTER)
-    return lv && focus_peaking && focus_peaking_disp;
+    return lv && focus_peaking && focus_peaking_disp && !focus_peaking_killed_by_dual_iso_rec();
     #else
     return 0;
     #endif
@@ -1586,7 +1613,7 @@ static int zebra_digic_dirty = 0;
 static void draw_zebras( int Z )
 {
     uint8_t * const bvram = bmp_vram_real();
-    int zd = Z && monitoring_enabled(zebra_draw) && (lv_luma_is_accurate() || PLAY_OR_QR_MODE) && (zebra_rec || NOT_RECORDING); // when to draw zebras
+    int zd = Z && monitoring_enabled(zebra_draw) && (lv_luma_is_accurate() || PLAY_OR_QR_MODE) && (zebra_rec || NOT_RECORDING) && !zebra_killed_by_dual_iso_rec(); // when to draw zebras
     if (zd)
     {
         #ifdef FEATURE_RAW_ZEBRAS
@@ -2143,7 +2170,7 @@ draw_zebra_and_focus( int Z, int F )
     #endif
     
     #ifdef FEATURE_FOCUS_PEAK
-    if (focus_peaking && focus_peaking_disp && !EXT_MONITOR_CONNECTED)
+    if (focus_peaking && !focus_peaking_killed_by_dual_iso_rec() && focus_peaking_disp && !EXT_MONITOR_CONNECTED)
     {
         if (lv) 
         {
@@ -2161,7 +2188,7 @@ draw_zebra_and_focus( int Z, int F )
     static int prev_thr = 50;
     static int thr_delta = 0;
 
-    if (F && focus_peaking)
+    if (F && focus_peaking && !focus_peaking_killed_by_dual_iso_rec())
     {
         // clear previously written pixels
         if (unlikely(!dirty_pixels)) dirty_pixels = malloc(MAX_DIRTY_PIXELS * sizeof(int));
@@ -2351,6 +2378,40 @@ clrscr_mirror( void )
 static MENU_UPDATE_FUNC(monitoring_mode_display)
 {
     MENU_SET_VALUE("%s", CURRENT_VALUE ? "ON" : "OFF");
+}
+#endif
+
+#if defined(CONFIG_MOVIE) && (defined(FEATURE_ZEBRA) || defined(FEATURE_FOCUS_PEAK))
+static MENU_UPDATE_FUNC(kill_zebra_dualiso_rec_display)
+{
+    MENU_SET_VALUE("%s", CURRENT_VALUE ? "ON" : "OFF");
+    if (CURRENT_VALUE)
+    {
+        if (!dual_iso_is_enabled_fn)
+            MENU_SET_WARNING(MENU_WARN_ADVICE, "Dual ISO module is not loaded.");
+        else if (!dual_iso_currently_enabled())
+            MENU_SET_WARNING(MENU_WARN_INFO, "No effect: Dual ISO is currently off.");
+        else if (RECORDING)
+            MENU_SET_WARNING(MENU_WARN_INFO, "Zebras hidden now (recording with Dual ISO).");
+        else
+            MENU_SET_WARNING(MENU_WARN_INFO, "Will hide zebras while recording with Dual ISO.");
+    }
+}
+
+static MENU_UPDATE_FUNC(kill_fp_dualiso_rec_display)
+{
+    MENU_SET_VALUE("%s", CURRENT_VALUE ? "ON" : "OFF");
+    if (CURRENT_VALUE)
+    {
+        if (!dual_iso_is_enabled_fn)
+            MENU_SET_WARNING(MENU_WARN_ADVICE, "Dual ISO module is not loaded.");
+        else if (!dual_iso_currently_enabled())
+            MENU_SET_WARNING(MENU_WARN_INFO, "No effect: Dual ISO is currently off.");
+        else if (RECORDING)
+            MENU_SET_WARNING(MENU_WARN_INFO, "Focus peak hidden now (recording with Dual ISO).");
+        else
+            MENU_SET_WARNING(MENU_WARN_INFO, "Will hide focus peak while recording with Dual ISO.");
+    }
 }
 #endif
 #ifdef FEATURE_ZEBRA
@@ -3218,6 +3279,36 @@ struct menu_entry zebra_menus[] = {
         },
     },
 #endif
+    #endif
+
+    #if defined(CONFIG_MOVIE) && defined(FEATURE_ZEBRA)
+    {
+        .name = "KILL Zebras (Dual ISO Rec)",
+        .priv       = &kill_zebra_dual_iso_rec,
+        .max = 1,
+        .icon_type = IT_BOOL,
+        .choices = CHOICES("OFF", "ON"),
+        .update     = kill_zebra_dualiso_rec_display,
+        .edit_mode = EM_INLINE_ADJUST,
+        .help = "Auto-hide zebras while recording, if Dual ISO is enabled.",
+        .help2 = "Zebras come back automatically once recording stops.\n"
+                 "No effect if Dual ISO is off. Independent from the FP option.",
+    },
+    #endif
+
+    #if defined(CONFIG_MOVIE) && defined(FEATURE_FOCUS_PEAK)
+    {
+        .name = "KILL FP (Dual ISO Rec)",
+        .priv       = &kill_fp_dual_iso_rec,
+        .max = 1,
+        .icon_type = IT_BOOL,
+        .choices = CHOICES("OFF", "ON"),
+        .update     = kill_fp_dualiso_rec_display,
+        .edit_mode = EM_INLINE_ADJUST,
+        .help = "Auto-hide focus peaking while recording, if Dual ISO is enabled.",
+        .help2 = "Focus peak comes back automatically once recording stops.\n"
+                 "No effect if Dual ISO is off. Independent from the Zebras option.",
+    },
     #endif
 
     #ifdef FEATURE_FOCUS_PEAK_DISP_FILTER
@@ -4594,7 +4685,7 @@ livev_hipriority_task( void* unused )
             msleep(100);
         }
 
-        int zd = monitoring_enabled(zebra_draw) && (lv_luma_is_accurate() || PLAY_OR_QR_MODE) && (zebra_rec || NOT_RECORDING); // when to draw zebras (should match the one from draw_zebra_and_focus)
+        int zd = monitoring_enabled(zebra_draw) && (lv_luma_is_accurate() || PLAY_OR_QR_MODE) && (zebra_rec || NOT_RECORDING) && !zebra_killed_by_dual_iso_rec(); // when to draw zebras (should match the one from draw_zebra_and_focus)
         if (!zd) digic_zebra_cleanup();
         
 #ifdef CONFIG_RAW_LIVEVIEW
