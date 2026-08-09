@@ -6634,6 +6634,11 @@ static void menu_close()
     canon_gui_enable_front_buffer(0);
     redraw();
     if (lv) bmp_on();
+#ifdef CONFIG_EOSM
+    /* The shooting-mode property can change while the ML menu is open.
+     * Re-apply the correct Canon/ML GUI ownership after the menu has closed. */
+    photo_canon_ui_mode_changed();
+#endif
 }
 
 /*

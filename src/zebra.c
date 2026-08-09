@@ -216,9 +216,24 @@ void photo_canon_ui_mode_changed()
         return;
 
     if (is_movie_mode() || !gd_photo_canon_ui)
+    {
+        /* Movie mode belongs to ML again.  Keep Canon's GUI request in its
+         * normal idle state and give ML ownership of the bitmap front buffer. */
+        SetGUIRequestMode(0);
         canon_gui_disable_front_buffer();
+        bmp_on();
+        redraw();
+    }
     else
-        canon_gui_enable_front_buffer(1);
+    {
+        /* Leaving ML's menu GUI behind is what previously produced a blank
+         * Canon shooting screen until INFO was pressed.  Return Canon to its
+         * normal shooting GUI explicitly, then expose its front buffer. */
+        SetGUIRequestMode(0);
+        canon_gui_enable_front_buffer(0);
+        bmp_on();
+        redraw();
+    }
 #endif
 }
 
@@ -3887,6 +3902,9 @@ struct menu_entry zebra_menus[] = {
 };
 
 #ifdef FEATURE_GLOBAL_DRAW
+#ifdef CONFIG_EOSM
+extern int photo_video_separate_exposure;
+#endif
 static struct menu_entry photo_mode_settings_menus[] = {
     {
         .name = "Photo mode",
@@ -3909,6 +3927,19 @@ static struct menu_entry photo_mode_settings_menus[] = {
                 .help2 = "ML overlays (zebras, focus peak, cropmarks...) come back\n"
                          "automatically as soon as you switch to movie mode.",
             },
+#ifdef CONFIG_EOSM
+            {
+                .name = "Separate Photo/Video Exposure",
+                .priv = &photo_video_separate_exposure,
+                .max = 1,
+                .icon_type = IT_BOOL,
+                .choices = CHOICES("OFF", "ON"),
+                .edit_mode = EM_INLINE_ADJUST,
+                .depends_on = DEP_PHOTO_MODE,
+                .help = "Remember separate ISO and shutter settings for photo and video mode.",
+                .help2 = "Aperture is not stored. Each mode restores its last ISO/shutter values.",
+            },
+#endif
             {
                 .name = "Canon UI: Image Review",
                 .priv       = &gd_photo_canon_ui_review,
@@ -4469,7 +4500,11 @@ int liveview_display_idle()
 // when it's safe to draw zebras and other on-screen stuff
 int zebra_should_run()
 {
-    return liveview_display_idle() && get_global_draw() &&
+    int canon_photo_exception = !is_movie_mode() &&
+        global_draw_forced_off_by_mode() &&
+        (zebra_canon_ui_override || focus_peak_canon_ui_override);
+
+    return liveview_display_idle() && (get_global_draw() || canon_photo_exception) &&
         !is_zoom_mode_so_no_zebras() &&
         !(clearscreen == 1 && (get_halfshutter_pressed() || dofpreview)) &&
         !WAVEFORM_FULLSCREEN;
@@ -4646,7 +4681,7 @@ void draw_histogram_and_waveform(int allow_play)
 #endif
 
     if (menu_active_and_not_hidden()) return;
-    if (!get_global_draw()) return;
+    if (!get_global_draw() && !hist_canon_ui_active) return;
     if (!liveview_display_idle() && !(PLAY_OR_QR_MODE && allow_play) && !gui_menu_shown()) return;
     if (is_zoom_mode_so_no_zebras()) return;
         
@@ -5166,7 +5201,8 @@ livev_lopriority_task( void* unused )
         #endif
 
         loprio_sleep();
-        if (!zebra_should_run())
+        int hist_canon_ui_run = hist_canon_ui_override && global_draw_forced_off_by_mode() && monitoring_enabled(hist_draw);
+        if (!zebra_should_run() && !hist_canon_ui_run)
         {
             if (WAVEFORM_FULLSCREEN && liveview_display_idle() && get_global_draw() && !is_zoom_mode_so_no_zebras() && !gui_menu_shown())
             {

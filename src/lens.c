@@ -1384,6 +1384,109 @@ static void lensinfo_set_aperture(int raw)
     update_stuff();
 }
 
+
+#ifdef CONFIG_EOSM
+/*
+ * EOS M photo/movie exposure memory.
+ *
+ * Canon normally carries ISO/shutter state across the dedicated photo/movie
+ * mode boundary.  Keep two runtime profiles instead.  Aperture is deliberately
+ * excluded because it is lens-driven and should remain Canon-controlled.
+ *
+ * Values are captured immediately before the mode property changes, then the
+ * target profile is restored from a task after Canon has finished its mode
+ * transition.  The delay is intentional: writing PROP_ISO/PROP_SHUTTER from
+ * inside the shooting-mode property callback can race Canon's own transition.
+ */
+CONFIG_INT("photo.video.exposure", photo_video_separate_exposure, 1);
+
+static int photo_saved_iso = -1;
+static int photo_saved_shutter = -1;
+static int video_saved_iso = -1;
+static int video_saved_shutter = -1;
+static int photo_saved_valid = 0;
+static int video_saved_valid = 0;
+
+static volatile int photo_video_exposure_restore_pending = 0;
+static volatile int photo_video_exposure_restore_movie = 0;
+
+void photo_video_exposure_mode_changed(int old_mode, int new_mode)
+{
+    int old_movie = (old_mode == SHOOTMODE_MOVIE);
+    int new_movie = (new_mode == SHOOTMODE_MOVIE);
+
+    if (old_movie == new_movie)
+        return;
+
+    if (photo_video_separate_exposure)
+    {
+        if (old_movie)
+        {
+            video_saved_iso = lens_info.raw_iso;
+            video_saved_shutter = lens_info.raw_shutter;
+            video_saved_valid = 1;
+        }
+        else
+        {
+            photo_saved_iso = lens_info.raw_iso;
+            photo_saved_shutter = lens_info.raw_shutter;
+            photo_saved_valid = 1;
+        }
+
+        photo_video_exposure_restore_movie = new_movie;
+        photo_video_exposure_restore_pending = 1;
+    }
+}
+
+static void photo_video_exposure_task(void *unused)
+{
+    (void)unused;
+
+    TASK_LOOP
+    {
+        if (!photo_video_exposure_restore_pending || !photo_video_separate_exposure)
+        {
+            msleep(50);
+            continue;
+        }
+
+        /* Let Canon finish changing the shooting mode and its exposure props. */
+        msleep(150);
+
+        if (!photo_video_separate_exposure ||
+            !photo_video_exposure_restore_pending)
+            continue;
+
+        int target_movie = photo_video_exposure_restore_movie;
+        int target_iso = target_movie ? video_saved_iso : photo_saved_iso;
+        int target_shutter = target_movie ? video_saved_shutter : photo_saved_shutter;
+        int target_valid = target_movie ? video_saved_valid : photo_saved_valid;
+
+        /* If another mode change happened while waiting, discard this restore. */
+        if ((is_movie_mode() ? 1 : 0) != target_movie)
+            continue;
+
+        if (target_valid)
+        {
+            /* A raw ISO of 0 is Auto ISO; use the same raw value Canon uses. */
+            if (target_iso >= 0)
+                lens_set_rawiso(target_iso);
+
+            /* A zero shutter means Canon is metering it automatically.  Do not
+             * try to force zero through lens_set_rawshutter(), which rejects it. */
+            if (target_shutter > 0)
+                lens_set_rawshutter(target_shutter);
+        }
+
+        photo_video_exposure_restore_pending = 0;
+        lens_display_set_dirty();
+        msleep(50);
+    }
+}
+
+TASK_CREATE("photo_video_exposure_task", photo_video_exposure_task, 0, 0x1d, 0x1000);
+#endif
+
 extern int bv_auto;
 
 #if defined(CONFIG_NO_MANUAL_EXPOSURE_MOVIE) && !defined(CONFIG_NO_DEDICATED_MOVIE_MODE)

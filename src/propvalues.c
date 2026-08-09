@@ -8,6 +8,7 @@
 #define _DONT_INCLUDE_PROPVALUES_
 #include "property.h"
 #include "shoot.h"
+#include "lens.h"
 #include "zebra.h"
 #include <platform/state-object.h>
 
@@ -125,6 +126,10 @@ volatile PROP_INT(PROP_SHOOTING_MODE, shooting_mode_custom);
 
 PROP_HANDLER(PROP_SHOOTING_MODE_2)
 {
+    #ifdef CONFIG_EOSM
+    photo_video_exposure_mode_changed(shooting_mode, buf[0]);
+    #endif
+
     shooting_mode = buf[0];
 
     #ifdef CONFIG_NO_DEDICATED_MOVIE_MODE
