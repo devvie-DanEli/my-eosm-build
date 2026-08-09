@@ -130,6 +130,11 @@ PROP_HANDLER(PROP_SHOOTING_MODE_2)
     #ifdef CONFIG_NO_DEDICATED_MOVIE_MODE
     ae_mode_movie = shooting_mode == SHOOTMODE_M;
     #endif
+
+    /* Re-sync the EOS M native Canon shooting screen on photo/movie changes. */
+    #ifdef CONFIG_EOSM
+    photo_canon_ui_mode_changed();
+    #endif
 }
 
 volatile int dofpreview;

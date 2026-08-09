@@ -145,7 +145,8 @@ struct slim_touch_arrow_target
 {
     int x1, y1, x2, y2;
     struct menu_entry *entry;
-    int mode; /* menu_entry_select: 1 = left/decrement, 0 = right/increment */
+    int mode; /* menu_entry_select: 1 = left/decrement, 0 = right/increment,
+                3 = SET/toggle (used for two-state touch rows) */
 };
 
 static struct slim_touch_arrow_target slim_touch_arrow_targets[32];
@@ -3128,6 +3129,24 @@ skip_name:
         slim_touch_arrow_add(entry,
             right_touch_x1, y + 2,
             x_after_value + arrow_w + arrow_pad + 16, y + h - 2, 0);
+
+        /*
+         * Two-state ON/OFF rows are switches, not directional controls.
+         * The visible value/switch area is much larger than either arrow,
+         * so make the whole control a SET hit target as well.  This prevents
+         * an easy-to-miss tap from falling through to another row/scroll area.
+         * Arrow targets are registered first, so their normal behavior remains
+         * unchanged; this target catches the value text and the space between
+         * the arrows.
+         */
+        if (IS_BOOL(entry) && entry->max - entry->min == 1)
+        {
+            int switch_x1 = xval - arrow_w - arrow_pad - 16;
+            int switch_x2 = x_after_value + arrow_w + arrow_pad + 16;
+            slim_touch_arrow_add(entry,
+                switch_x1, y + 2, switch_x2, y + h - 2, 3);
+        }
+
         /* Keep the two enlarged hitboxes disjoint around narrow values. */
         if (left_touch_target >= 0 && left_touch_target < slim_touch_arrow_target_count)
             slim_touch_arrow_targets[left_touch_target].x2 = MIN(
