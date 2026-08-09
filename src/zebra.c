@@ -185,18 +185,21 @@ static CONFIG_INT( "global.draw",   global_draw, 3 );
 #define ZEBRAS_IN_QUICKREVIEW (global_draw > 1)
 #define ZEBRAS_IN_LIVEVIEW (global_draw & 1)
 
-/* "Canon UI: Shooting Screen": force ML overlay graphics off while in
- * photo mode (stock Canon shooting screen), and let them come back
- * automatically in movie mode. Only affects the live shooting screen. */
-static CONFIG_INT( "global.draw.photo.canon", gd_photo_canon_ui, 1 );
-
-/* "Canon UI: Image Review": same idea, but for playback / quick review
- * instead of the live shooting screen. */
-static CONFIG_INT( "global.draw.photo.canon.review", gd_photo_canon_ui_review, 1 );
+/*
+ * EOS M slim UI: photo Live View uses the normal ML LV overlay just like
+ * movie Live View.  The previous Canon-shooting-screen mode is intentionally
+ * retired here; keeping ML's own overlay in both modes is what lets the same
+ * histogram/zebra/focus-peaking pipeline work consistently.
+ *
+ * Keep the old symbols as constants for source compatibility with older
+ * configuration/menu code, but never allow them to suppress Global Draw.
+ */
+static const int gd_photo_canon_ui = 0;
+static const int gd_photo_canon_ui_review = 1;
 
 static int global_draw_forced_off_by_mode()
 {
-    return gd_photo_canon_ui && !is_movie_mode();
+    return 0;
 }
 
 static int global_draw_forced_off_by_mode_review()
@@ -215,35 +218,25 @@ void photo_canon_ui_mode_changed()
     if (!lv || gui_menu_shown())
         return;
 
-    if (is_movie_mode() || !gd_photo_canon_ui)
-    {
-        /* Movie mode belongs to ML again.  Keep Canon's GUI request in its
-         * normal idle state and give ML ownership of the bitmap front buffer. */
-        SetGUIRequestMode(0);
-        canon_gui_disable_front_buffer();
-        bmp_on();
-        redraw();
-    }
-    else
-    {
-        /* Leaving ML's menu GUI behind is what previously produced a blank
-         * Canon shooting screen until INFO was pressed.  Return Canon to its
-         * normal shooting GUI explicitly, then expose its front buffer. */
-        SetGUIRequestMode(0);
-        canon_gui_enable_front_buffer(0);
-        bmp_on();
-        redraw();
-    }
+    /*
+     * The slim EOS M build deliberately keeps ML's Live View overlay in
+     * both photo and movie mode.  Do not hand the bitmap front buffer to
+     * Canon on a photo/movie transition; that was the source of the blank
+     * photo LV and the later overlay/front-buffer synchronization problems.
+     */
+    SetGUIRequestMode(0);
+    canon_gui_disable_front_buffer();
+    bmp_on();
+    redraw();
 #endif
 }
 
-/* Per-feature exceptions to "Canon UI: Shooting Screen": let Zebras,
- * Focus Peak and Histogram individually keep showing over the stock
- * Canon photo shooting screen, while everything else covered by
- * global_draw (cropmarks, Magic Zoom, bitrate...) stays off as before. */
-static CONFIG_INT("global.draw.photo.canon.zebra", zebra_canon_ui_override, 0);
-static CONFIG_INT("global.draw.photo.canon.fp",     focus_peak_canon_ui_override, 0);
-static CONFIG_INT("global.draw.photo.canon.hist",   hist_canon_ui_override, 0);
+/* The ML photo overlay is now the normal Global Draw path.  These legacy
+ * exception flags are retained as constants so older call sites remain
+ * source-compatible, but they no longer need to bypass a Canon UI block. */
+static const int zebra_canon_ui_override = 0;
+static const int focus_peak_canon_ui_override = 0;
+static const int hist_canon_ui_override = 0;
 
 /* Same logic as get_global_draw(), but callers that were granted a Canon
  * UI exception (their own override CONFIG_INT is ON) can ask it to
@@ -3912,21 +3905,8 @@ static struct menu_entry photo_mode_settings_menus[] = {
         .submenu_width = 650,
         .icon_type = IT_SUBMENU,
         .depends_on = DEP_PHOTO_MODE,
-        .help = "Auto-switch to the stock Canon UI while shooting photos.",
+        .help = "ML Live View overlay and touch controls for photo mode.",
         .children =  (struct menu_entry[]) {
-            {
-                .name = "Canon UI: Shooting Screen",
-                .priv       = &gd_photo_canon_ui,
-                .max = 1,
-                .icon_type = IT_BOOL,
-                .choices = CHOICES("OFF", "ON"),
-                .update     = gd_photo_canon_ui_display,
-                .edit_mode = EM_INLINE_ADJUST,
-                .depends_on = DEP_PHOTO_MODE,
-                .help = "Switch to the stock Canon shooting screen in photo mode.",
-                .help2 = "ML overlays (zebras, focus peak, cropmarks...) come back\n"
-                         "automatically as soon as you switch to movie mode.",
-            },
 #ifdef CONFIG_EOSM
             {
                 .name = "Separate Photo/Video Exposure",
@@ -3938,61 +3918,6 @@ static struct menu_entry photo_mode_settings_menus[] = {
                 .depends_on = DEP_PHOTO_MODE,
                 .help = "Remember separate ISO and shutter settings for photo and video mode.",
                 .help2 = "Aperture is not stored. Each mode restores its last ISO/shutter values.",
-            },
-#endif
-            {
-                .name = "Canon UI: Image Review",
-                .priv       = &gd_photo_canon_ui_review,
-                .max = 1,
-                .icon_type = IT_BOOL,
-                .choices = CHOICES("OFF", "ON"),
-                .update     = gd_photo_canon_ui_review_display,
-                .edit_mode = EM_INLINE_ADJUST,
-                .depends_on = DEP_PHOTO_MODE,
-                .help = "Switch to the stock Canon playback/review screen in photo mode.",
-                .help2 = "ML overlays come back automatically as soon as\n"
-                         "you switch to movie mode.",
-            },
-#if defined(FEATURE_GLOBAL_DRAW) && defined(FEATURE_ZEBRA)
-            {
-                .name = "Zebras in Canon UI",
-                .priv = &zebra_canon_ui_override,
-                .max = 1,
-                .icon_type = IT_BOOL,
-                .choices = CHOICES("OFF", "ON"),
-                .update = zebra_canon_ui_override_display,
-                .edit_mode = EM_INLINE_ADJUST,
-                .depends_on = DEP_PHOTO_MODE,
-                .help = "Keep zebras visible over the stock Canon photo shooting screen.",
-                .help2 = "Independent from the main Zebras setting.",
-            },
-#endif
-#if defined(FEATURE_GLOBAL_DRAW) && defined(FEATURE_FOCUS_PEAK)
-            {
-                .name = "Focus Peak in Canon UI",
-                .priv = &focus_peak_canon_ui_override,
-                .max = 1,
-                .icon_type = IT_BOOL,
-                .choices = CHOICES("OFF", "ON"),
-                .update = focus_peak_canon_ui_override_display,
-                .edit_mode = EM_INLINE_ADJUST,
-                .depends_on = DEP_PHOTO_MODE,
-                .help = "Keep focus peaking visible over the stock Canon photo shooting screen.",
-                .help2 = "Independent from the main Focus Peak setting.",
-            },
-#endif
-#if defined(FEATURE_GLOBAL_DRAW) && defined(FEATURE_HISTOGRAM)
-            {
-                .name = "Histogram in Canon UI",
-                .priv = &hist_canon_ui_override,
-                .max = 1,
-                .icon_type = IT_BOOL,
-                .choices = CHOICES("OFF", "ON"),
-                .update = hist_canon_ui_override_display,
-                .edit_mode = EM_INLINE_ADJUST,
-                .depends_on = DEP_PHOTO_MODE,
-                .help = "Keep the histogram visible over the stock Canon photo shooting screen.",
-                .help2 = "This is the photo-mode Canon UI histogram exception.",
             },
 #endif
             MENU_EOL
@@ -5356,6 +5281,24 @@ int handle_disp_preset_key(struct event * event)
 }
 
 #ifdef FEATURE_OVERLAYS_IN_PLAYBACK_MODE
+#ifdef CONFIG_EOSM
+/* EOS M video LV normally keeps Canon's bitmap/front buffer suppressed for ML.
+ * When the user enters Canon playback, however, the stock playback controls
+ * (including previous/next, exact/all, and delete) must be allowed to draw.
+ * Restore that state after Canon has completed the PLAY transition. */
+static void eosm_restore_canon_playback_ui()
+{
+    if (!PLAY_MODE)
+        return;
+
+    extern int kill_canon_gui_mode;
+    kill_canon_gui_mode = 0;
+    canon_gui_enable_front_buffer(0);
+    bmp_on();
+    redraw();
+}
+#endif
+
 static int overlays_playback_displayed = 0;
 
 static void overlays_playback_clear()
@@ -5393,6 +5336,16 @@ int handle_overlays_playback(struct event * event)
     // enable LiveV stuff in Play mode
     if (PLAY_OR_QR_MODE)
     {
+#ifdef CONFIG_EOSM
+        /* PLAY is asynchronous on EOS M. The movie LiveView path may have left
+         * Canon's front buffer disabled, which makes the native playback
+         * navigation/delete strip disappear. Re-enable it only after Canon has
+         * entered PLAY; if PLAY is being used to leave playback, the callback
+         * safely does nothing. */
+        if (event->param == BGMT_PLAY && !IS_FAKE(event))
+            delayed_call(800, eosm_restore_canon_playback_ui, 0);
+#endif
+
         switch(event->param)
         {
 #if defined(BTN_ZEBRAS_FOR_PLAYBACK) && defined(BTN_ZEBRAS_FOR_PLAYBACK_NAME)
