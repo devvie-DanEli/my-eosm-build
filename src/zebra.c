@@ -185,6 +185,96 @@ static CONFIG_INT( "global.draw",   global_draw, 3 );
 #define ZEBRAS_IN_QUICKREVIEW (global_draw > 1)
 #define ZEBRAS_IN_LIVEVIEW (global_draw & 1)
 
+/* "Canon UI: Shooting Screen": force ML overlay graphics off while in
+ * photo mode (stock Canon shooting screen), and let them come back
+ * automatically in movie mode. Only affects the live shooting screen. */
+static CONFIG_INT( "global.draw.photo.canon", gd_photo_canon_ui, 0 );
+
+/* "Canon UI: Image Review": same idea, but for playback / quick review
+ * instead of the live shooting screen. */
+static CONFIG_INT( "global.draw.photo.canon.review", gd_photo_canon_ui_review, 0 );
+
+static int global_draw_forced_off_by_mode()
+{
+    return gd_photo_canon_ui && !is_movie_mode();
+}
+
+static int global_draw_forced_off_by_mode_review()
+{
+    return gd_photo_canon_ui_review && !is_movie_mode();
+}
+
+/* Per-feature exceptions to "Canon UI: Shooting Screen": let Zebras,
+ * Focus Peak and Histogram individually keep showing over the stock
+ * Canon photo shooting screen, while everything else covered by
+ * global_draw (cropmarks, Magic Zoom, bitrate...) stays off as before. */
+static CONFIG_INT("global.draw.photo.canon.zebra", zebra_canon_ui_override, 0);
+static CONFIG_INT("global.draw.photo.canon.fp",     focus_peak_canon_ui_override, 0);
+static CONFIG_INT("global.draw.photo.canon.hist",   hist_canon_ui_override, 0);
+
+/* Same logic as get_global_draw(), but callers that were granted a Canon
+ * UI exception (their own override CONFIG_INT is ON) can ask it to
+ * ignore the "Canon UI: Shooting Screen" block specifically. Every other
+ * reason get_global_draw() would say no (master Global Draw switch off,
+ * ML not started, display off, menu open, mid-recording-start...) still
+ * applies exactly as before. */
+/* from powersave.c */
+extern int idle_globaldraw_disable;
+
+static int global_draw_active(int ignore_canon_ui)
+{
+#ifdef FEATURE_GLOBAL_DRAW
+
+    #ifdef LV_DISP_MODE
+        lv_disp_mode = LV_DISP_MODE;
+    #endif
+
+    extern int ml_started;
+    if (!ml_started) return 0;
+    if (!global_draw) return 0;
+
+    if (PLAY_OR_QR_MODE && global_draw_forced_off_by_mode_review()) return 0; // Canon UI: Image Review
+
+    if (PLAY_MODE) return 1; // exception, always draw stuff in play mode
+
+    #ifdef CONFIG_CONSOLE
+    extern int console_visible;
+    if (console_visible && !lv) return 0;
+    #endif
+
+    if (lv && ZEBRAS_IN_LIVEVIEW)
+    {
+        if (global_draw_forced_off_by_mode() && !ignore_canon_ui) return 0;
+
+        return 
+            lv_disp_mode == 0 &&
+            !idle_globaldraw_disable && 
+            bmp_is_on() &&
+            DISPLAY_IS_ON && 
+            !RECORDING_H264_STARTING &&
+            #ifdef CONFIG_KILL_FLICKER
+            !(lv && kill_canon_gui_mode && !canon_gui_front_buffer_disabled() && !gui_menu_shown()) &&
+            #endif
+            !LV_PAUSED && 
+            #ifdef CONFIG_5D3
+            !(hdmi_code >= 5 && video_mode_resolution>0) && // unusual VRAM parameters
+            #endif
+            job_state_ready_to_take_pic();
+    }
+    
+    if (!lv && ZEBRAS_IN_QUICKREVIEW)
+    {
+        return DISPLAY_IS_ON;
+    }
+#endif
+    return 0;
+}
+
+int get_global_draw() // menu setting, or off if 
+{
+    return global_draw_active(0);
+}
+
 static CONFIG_INT( "zebra.draw",    zebra_draw, 0 );
 #ifdef FEATURE_ZEBRA_FAST
 static CONFIG_INT( "zebra.colorspace",    zebra_colorspace,   2 );// luma/rgb/lumafast
@@ -453,54 +543,6 @@ PROP_HANDLER(PROP_LCD_POSITION)
     redraw_after(100);
 }
 #endif
-
-/* from powersave.c */
-extern int idle_globaldraw_disable;
-
-int get_global_draw() // menu setting, or off if 
-{
-#ifdef FEATURE_GLOBAL_DRAW
-    
-    #ifdef LV_DISP_MODE
-        lv_disp_mode = LV_DISP_MODE;
-    #endif
-
-    extern int ml_started;
-    if (!ml_started) return 0;
-    if (!global_draw) return 0;
-    
-    if (PLAY_MODE) return 1; // exception, always draw stuff in play mode
-    
-    #ifdef CONFIG_CONSOLE
-    extern int console_visible;
-    if (console_visible && !lv) return 0;
-    #endif
-    
-    if (lv && ZEBRAS_IN_LIVEVIEW)
-    {
-        return 
-            lv_disp_mode == 0 &&
-            !idle_globaldraw_disable && 
-            bmp_is_on() &&
-            DISPLAY_IS_ON && 
-            !RECORDING_H264_STARTING &&
-            #ifdef CONFIG_KILL_FLICKER
-            !(lv && kill_canon_gui_mode && !canon_gui_front_buffer_disabled() && !gui_menu_shown()) &&
-            #endif
-            !LV_PAUSED && 
-            #ifdef CONFIG_5D3
-            !(hdmi_code >= 5 && video_mode_resolution>0) && // unusual VRAM parameters
-            #endif
-            job_state_ready_to_take_pic();
-    }
-    
-    if (!lv && ZEBRAS_IN_QUICKREVIEW)
-    {
-        return DISPLAY_IS_ON;
-    }
-#endif
-    return 0;
-}
 
 int get_global_draw_setting() // whatever is set in menu
 {
@@ -2160,7 +2202,15 @@ static void focus_found_pixel_playback(int x, int y, int e, int thr, uint8_t * c
 static int FAST
 draw_zebra_and_focus( int Z, int F )
 {
-    if (unlikely(!get_global_draw())) return 0;
+    /* Canon UI: Shooting Screen forces overlays off in photo mode. The
+     * "Zebras in Canon UI" / "Focus Peak in Canon UI" toggles let each
+     * of these two features individually opt back in; every other
+     * reason global draw could be off (master switch, display off,
+     * menu open...) still blocks both, same as before. */
+    int zebra_allowed = global_draw_active(zebra_canon_ui_override);
+    int focus_allowed = global_draw_active(focus_peak_canon_ui_override);
+
+    if (unlikely(!zebra_allowed && !focus_allowed)) return 0;
 
     uint8_t * const bvram = bmp_vram_real();
     if (unlikely(!bvram)) return 0;
@@ -2183,11 +2233,11 @@ draw_zebra_and_focus( int Z, int F )
     #endif
 
     #ifdef FEATURE_ZEBRA
-    draw_zebras(Z);
+    if (zebra_allowed) draw_zebras(Z);
     #endif
     
     #ifdef FEATURE_FOCUS_PEAK
-    if (focus_peaking && !focus_peaking_killed_by_dual_iso_rec() && focus_peaking_disp && !EXT_MONITOR_CONNECTED)
+    if (focus_allowed && focus_peaking && !focus_peaking_killed_by_dual_iso_rec() && focus_peaking_disp && !EXT_MONITOR_CONNECTED)
     {
         if (lv) 
         {
@@ -2205,7 +2255,7 @@ draw_zebra_and_focus( int Z, int F )
     static int prev_thr = 50;
     static int thr_delta = 0;
 
-    if (F && focus_peaking && !focus_peaking_killed_by_dual_iso_rec())
+    if (focus_allowed && F && focus_peaking && !focus_peaking_killed_by_dual_iso_rec())
     {
         // clear previously written pixels
         if (unlikely(!dirty_pixels)) dirty_pixels = malloc(MAX_DIRTY_PIXELS * sizeof(int));
@@ -2428,6 +2478,74 @@ static MENU_UPDATE_FUNC(kill_fp_dualiso_rec_display)
             MENU_SET_WARNING(MENU_WARN_INFO, "Focus peak hidden now (recording with Dual ISO).");
         else
             MENU_SET_WARNING(MENU_WARN_INFO, "Will hide focus peak while recording with Dual ISO.");
+    }
+}
+
+static MENU_UPDATE_FUNC(zebra_canon_ui_override_display)
+{
+    MENU_SET_VALUE("%s", CURRENT_VALUE ? "ON" : "OFF");
+    if (CURRENT_VALUE)
+    {
+        if (!gd_photo_canon_ui)
+            MENU_SET_WARNING(MENU_WARN_ADVICE, "No effect: turn on Settings > Photo mode > Canon UI: Shooting Screen.");
+        else if (!is_movie_mode())
+            MENU_SET_WARNING(MENU_WARN_INFO, "Zebras kept visible now, over the Canon shooting screen.");
+        else
+            MENU_SET_WARNING(MENU_WARN_INFO, "Will keep zebras visible when you switch to photo mode.");
+    }
+}
+
+static MENU_UPDATE_FUNC(focus_peak_canon_ui_override_display)
+{
+    MENU_SET_VALUE("%s", CURRENT_VALUE ? "ON" : "OFF");
+    if (CURRENT_VALUE)
+    {
+        if (!gd_photo_canon_ui)
+            MENU_SET_WARNING(MENU_WARN_ADVICE, "No effect: turn on Settings > Photo mode > Canon UI: Shooting Screen.");
+        else if (!is_movie_mode())
+            MENU_SET_WARNING(MENU_WARN_INFO, "Focus peak kept visible now, over the Canon shooting screen.");
+        else
+            MENU_SET_WARNING(MENU_WARN_INFO, "Will keep focus peak visible when you switch to photo mode.");
+    }
+}
+
+static MENU_UPDATE_FUNC(hist_canon_ui_override_display)
+{
+    MENU_SET_VALUE("%s", CURRENT_VALUE ? "ON" : "OFF");
+    if (CURRENT_VALUE)
+    {
+        if (!gd_photo_canon_ui)
+            MENU_SET_WARNING(MENU_WARN_ADVICE, "No effect: turn on Settings > Photo mode > Canon UI: Shooting Screen.");
+        else if (!is_movie_mode())
+            MENU_SET_WARNING(MENU_WARN_INFO, "Histogram kept visible now, over the Canon shooting screen.");
+        else
+            MENU_SET_WARNING(MENU_WARN_INFO, "Will keep the histogram visible when you switch to photo mode.");
+    }
+}
+#endif
+
+#ifdef FEATURE_GLOBAL_DRAW
+static MENU_UPDATE_FUNC(gd_photo_canon_ui_display)
+{
+    MENU_SET_VALUE("%s", CURRENT_VALUE ? "ON" : "OFF");
+    if (CURRENT_VALUE)
+    {
+        if (!is_movie_mode())
+            MENU_SET_WARNING(MENU_WARN_INFO, "Canon UI active now (photo mode).");
+        else
+            MENU_SET_WARNING(MENU_WARN_INFO, "Will switch to Canon UI when you go to photo mode.");
+    }
+}
+
+static MENU_UPDATE_FUNC(gd_photo_canon_ui_review_display)
+{
+    MENU_SET_VALUE("%s", CURRENT_VALUE ? "ON" : "OFF");
+    if (CURRENT_VALUE)
+    {
+        if (!is_movie_mode())
+            MENU_SET_WARNING(MENU_WARN_INFO, "Canon review screen active now (photo mode).");
+        else
+            MENU_SET_WARNING(MENU_WARN_INFO, "Will switch to Canon review screen in photo mode.");
     }
 }
 #endif
@@ -3328,6 +3446,36 @@ struct menu_entry zebra_menus[] = {
     },
     #endif
 
+    #if defined(FEATURE_GLOBAL_DRAW) && defined(FEATURE_ZEBRA)
+    {
+        .name = "Zebras in Canon UI",
+        .priv       = &zebra_canon_ui_override,
+        .max = 1,
+        .icon_type = IT_BOOL,
+        .choices = CHOICES("OFF", "ON"),
+        .update     = zebra_canon_ui_override_display,
+        .edit_mode = EM_INLINE_ADJUST,
+        .help = "Keep zebras visible even while the stock Canon shooting screen is on.",
+        .help2 = "Requires Settings > Photo mode > Canon UI: Shooting Screen.\n"
+                 "Independent from the Focus Peak / Histogram options.",
+    },
+    #endif
+
+    #if defined(FEATURE_GLOBAL_DRAW) && defined(FEATURE_FOCUS_PEAK)
+    {
+        .name = "Focus Peak in Canon UI",
+        .priv       = &focus_peak_canon_ui_override,
+        .max = 1,
+        .icon_type = IT_BOOL,
+        .choices = CHOICES("OFF", "ON"),
+        .update     = focus_peak_canon_ui_override_display,
+        .edit_mode = EM_INLINE_ADJUST,
+        .help = "Keep focus peak visible even while the stock Canon shooting screen is on.",
+        .help2 = "Requires Settings > Photo mode > Canon UI: Shooting Screen.\n"
+                 "Independent from the Zebras / Histogram options.",
+    },
+    #endif
+
     #ifdef FEATURE_FOCUS_PEAK_DISP_FILTER
         #ifndef FEATURE_FOCUS_PEAK
         #error This requires FEATURE_FOCUS_PEAK.
@@ -3695,6 +3843,20 @@ struct menu_entry zebra_menus[] = {
     },
 #endif
     #endif
+    #if defined(FEATURE_GLOBAL_DRAW) && defined(FEATURE_HISTOGRAM)
+    {
+        .name = "Histogram in Canon UI",
+        .priv       = &hist_canon_ui_override,
+        .max = 1,
+        .icon_type = IT_BOOL,
+        .choices = CHOICES("OFF", "ON"),
+        .update     = hist_canon_ui_override_display,
+        .edit_mode = EM_INLINE_ADJUST,
+        .help = "Keep the histogram visible even while the stock Canon shooting screen is on.",
+        .help2 = "Requires Settings > Photo mode > Canon UI: Shooting Screen.\n"
+                 "Independent from the Zebras / Focus Peak options.",
+    },
+    #endif
     #ifdef FEATURE_WAVEFORM
 #ifdef CONFIG_SLIM_MENUS
     {
@@ -3749,6 +3911,45 @@ struct menu_entry zebra_menus[] = {
     },
     #endif
 };
+
+#ifdef FEATURE_GLOBAL_DRAW
+static struct menu_entry photo_mode_settings_menus[] = {
+    {
+        .name = "Photo mode",
+        .select = menu_open_submenu,
+        .submenu_width = 650,
+        .icon_type = IT_SUBMENU,
+        .help = "Auto-switch to the stock Canon UI while shooting photos.",
+        .children =  (struct menu_entry[]) {
+            {
+                .name = "Canon UI: Shooting Screen",
+                .priv       = &gd_photo_canon_ui,
+                .max = 1,
+                .icon_type = IT_BOOL,
+                .choices = CHOICES("OFF", "ON"),
+                .update     = gd_photo_canon_ui_display,
+                .edit_mode = EM_INLINE_ADJUST,
+                .help = "Switch to the stock Canon shooting screen in photo mode.",
+                .help2 = "ML overlays (zebras, focus peak, cropmarks...) come back\n"
+                         "automatically as soon as you switch to movie mode.",
+            },
+            {
+                .name = "Canon UI: Image Review",
+                .priv       = &gd_photo_canon_ui_review,
+                .max = 1,
+                .icon_type = IT_BOOL,
+                .choices = CHOICES("OFF", "ON"),
+                .update     = gd_photo_canon_ui_review_display,
+                .edit_mode = EM_INLINE_ADJUST,
+                .help = "Switch to the stock Canon playback/review screen in photo mode.",
+                .help2 = "ML overlays come back automatically as soon as\n"
+                         "you switch to movie mode.",
+            },
+            MENU_EOL
+        },
+    },
+};
+#endif
 
 static struct menu_entry livev_dbg_menus[] = {
     #ifdef FEATURE_SHOW_OVERLAY_FPS
@@ -4369,9 +4570,13 @@ int should_draw_bottom_graphs()
 
 void draw_histogram_and_waveform(int allow_play)
 {
+    /* Histogram in Canon UI: lets the histogram specifically bypass the
+     * "Canon UI: Shooting Screen" suppression, independent of waveform /
+     * vectorscope, which stay off in that mode as before. */
+    int hist_canon_ui_active = hist_canon_ui_override && global_draw_forced_off_by_mode();
 
     if (menu_active_and_not_hidden()) return;
-    if (!get_global_draw()) return;
+    if (!get_global_draw() && !hist_canon_ui_active) return;
 
     get_yuv422_vram();
 
@@ -4389,7 +4594,7 @@ void draw_histogram_and_waveform(int allow_play)
 #endif
     
     if (menu_active_and_not_hidden()) return; // hack: not to draw histo over menu
-    if (!get_global_draw()) return;
+    if (!get_global_draw() && !hist_canon_ui_active) return;
     if (!liveview_display_idle() && !(PLAY_OR_QR_MODE && allow_play) && !gui_menu_shown()) return;
     if (is_zoom_mode_so_no_zebras()) return;
 
@@ -4398,7 +4603,7 @@ void draw_histogram_and_waveform(int allow_play)
     int waveform_scale = waveform_touch_expanded ? 2 : 1;
 
 #ifdef FEATURE_HISTOGRAM
-    if( monitoring_enabled(hist_draw) && !WAVEFORM_FULLSCREEN)
+    if( monitoring_enabled(hist_draw) && !WAVEFORM_FULLSCREEN && (get_global_draw() || hist_canon_ui_active))
     {
         extern int console_visible;
         #ifdef CONFIG_4_3_SCREEN
@@ -4646,7 +4851,7 @@ int is_focus_peaking_enabled()
     return
         focus_peaking &&
         (lv || (QR_MODE && ZEBRAS_IN_QUICKREVIEW))
-        && get_global_draw()
+        && global_draw_active(focus_peak_canon_ui_override)
         && !should_draw_zoom_overlay()
     ;
 #else
@@ -4696,6 +4901,24 @@ livev_hipriority_task( void* unused )
     {
         //~ vsync(&YUV422_LV_BUFFER_DISPLAY_ADDR);
         fps_ticks++;
+
+        #ifdef FEATURE_GLOBAL_DRAW
+        {
+            /* "Canon UI: Shooting Screen": the moment ML overlays get forced
+             * off by switching to photo mode, wipe whatever was already
+             * drawn (zebras, focus peak, cropmarks...) so it doesn't sit
+             * frozen over the Canon shooting screen. Switching back to
+             * movie mode needs no explicit action - overlays just resume
+             * drawing fresh on their own. */
+            static int was_forced_off_by_mode = 0;
+            int forced_off_now = global_draw_forced_off_by_mode();
+            if (forced_off_now && !was_forced_off_by_mode && lv)
+            {
+                BMP_LOCK( clrscr_mirror(); )
+            }
+            was_forced_off_by_mode = forced_off_now;
+        }
+        #endif
 
         while (is_mvr_buffer_almost_full())
         {
@@ -5176,6 +5399,9 @@ static void zebra_init()
 #endif
     precompute_yuv2rgb();
     menu_add( "Overlay", zebra_menus, COUNT(zebra_menus) );
+    #ifdef FEATURE_GLOBAL_DRAW
+    menu_add( "Settings", photo_mode_settings_menus, COUNT(photo_mode_settings_menus) );
+    #endif
     menu_add( "Debug", livev_dbg_menus, COUNT(livev_dbg_menus) );
     //~ menu_add( "Movie", movie_menus, COUNT(movie_menus) );
     //~ menu_add( "Config", cfg_menus, COUNT(cfg_menus) );
