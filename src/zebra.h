@@ -127,6 +127,9 @@ int get_under_and_over_exposure(int thr_lo, int thr_hi, int* under, int* over);
 int get_y_skip_offset_for_histogram();
 int get_y_skip_offset_for_overlays();
 
+/* Re-sync Canon's native shooting screen after photo/movie mode changes. */
+void photo_canon_ui_mode_changed();
+
 /* from bitrate code, which needs some massive cleanup, maybe move to a module and keep only some basic info in core */
 extern int is_mvr_buffer_almost_full();
 

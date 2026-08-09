@@ -188,11 +188,11 @@ static CONFIG_INT( "global.draw",   global_draw, 3 );
 /* "Canon UI: Shooting Screen": force ML overlay graphics off while in
  * photo mode (stock Canon shooting screen), and let them come back
  * automatically in movie mode. Only affects the live shooting screen. */
-static CONFIG_INT( "global.draw.photo.canon", gd_photo_canon_ui, 0 );
+static CONFIG_INT( "global.draw.photo.canon", gd_photo_canon_ui, 1 );
 
 /* "Canon UI: Image Review": same idea, but for playback / quick review
  * instead of the live shooting screen. */
-static CONFIG_INT( "global.draw.photo.canon.review", gd_photo_canon_ui_review, 0 );
+static CONFIG_INT( "global.draw.photo.canon.review", gd_photo_canon_ui_review, 1 );
 
 static int global_draw_forced_off_by_mode()
 {
@@ -202,6 +202,24 @@ static int global_draw_forced_off_by_mode()
 static int global_draw_forced_off_by_mode_review()
 {
     return gd_photo_canon_ui_review && !is_movie_mode();
+}
+
+/*
+ * Keep Canon's native shooting UI visible when the camera changes between
+ * photo and movie modes. The ML menu still owns the front buffer while a
+ * menu is open; this only changes the normal shooting screen.
+ */
+void photo_canon_ui_mode_changed()
+{
+#ifdef CONFIG_EOSM
+    if (!lv || gui_menu_shown())
+        return;
+
+    if (is_movie_mode() || !gd_photo_canon_ui)
+        canon_gui_disable_front_buffer();
+    else
+        canon_gui_enable_front_buffer(1);
+#endif
 }
 
 /* Per-feature exceptions to "Canon UI: Shooting Screen": let Zebras,
@@ -3446,36 +3464,6 @@ struct menu_entry zebra_menus[] = {
     },
     #endif
 
-    #if defined(FEATURE_GLOBAL_DRAW) && defined(FEATURE_ZEBRA)
-    {
-        .name = "Zebras in Canon UI",
-        .priv       = &zebra_canon_ui_override,
-        .max = 1,
-        .icon_type = IT_BOOL,
-        .choices = CHOICES("OFF", "ON"),
-        .update     = zebra_canon_ui_override_display,
-        .edit_mode = EM_INLINE_ADJUST,
-        .help = "Keep zebras visible even while the stock Canon shooting screen is on.",
-        .help2 = "Requires Settings > Photo mode > Canon UI: Shooting Screen.\n"
-                 "Independent from the Focus Peak / Histogram options.",
-    },
-    #endif
-
-    #if defined(FEATURE_GLOBAL_DRAW) && defined(FEATURE_FOCUS_PEAK)
-    {
-        .name = "Focus Peak in Canon UI",
-        .priv       = &focus_peak_canon_ui_override,
-        .max = 1,
-        .icon_type = IT_BOOL,
-        .choices = CHOICES("OFF", "ON"),
-        .update     = focus_peak_canon_ui_override_display,
-        .edit_mode = EM_INLINE_ADJUST,
-        .help = "Keep focus peak visible even while the stock Canon shooting screen is on.",
-        .help2 = "Requires Settings > Photo mode > Canon UI: Shooting Screen.\n"
-                 "Independent from the Zebras / Histogram options.",
-    },
-    #endif
-
     #ifdef FEATURE_FOCUS_PEAK_DISP_FILTER
         #ifndef FEATURE_FOCUS_PEAK
         #error This requires FEATURE_FOCUS_PEAK.
@@ -3843,20 +3831,6 @@ struct menu_entry zebra_menus[] = {
     },
 #endif
     #endif
-    #if defined(FEATURE_GLOBAL_DRAW) && defined(FEATURE_HISTOGRAM)
-    {
-        .name = "Histogram in Canon UI",
-        .priv       = &hist_canon_ui_override,
-        .max = 1,
-        .icon_type = IT_BOOL,
-        .choices = CHOICES("OFF", "ON"),
-        .update     = hist_canon_ui_override_display,
-        .edit_mode = EM_INLINE_ADJUST,
-        .help = "Keep the histogram visible even while the stock Canon shooting screen is on.",
-        .help2 = "Requires Settings > Photo mode > Canon UI: Shooting Screen.\n"
-                 "Independent from the Zebras / Focus Peak options.",
-    },
-    #endif
     #ifdef FEATURE_WAVEFORM
 #ifdef CONFIG_SLIM_MENUS
     {
@@ -3919,6 +3893,7 @@ static struct menu_entry photo_mode_settings_menus[] = {
         .select = menu_open_submenu,
         .submenu_width = 650,
         .icon_type = IT_SUBMENU,
+        .depends_on = DEP_PHOTO_MODE,
         .help = "Auto-switch to the stock Canon UI while shooting photos.",
         .children =  (struct menu_entry[]) {
             {
@@ -3929,6 +3904,7 @@ static struct menu_entry photo_mode_settings_menus[] = {
                 .choices = CHOICES("OFF", "ON"),
                 .update     = gd_photo_canon_ui_display,
                 .edit_mode = EM_INLINE_ADJUST,
+                .depends_on = DEP_PHOTO_MODE,
                 .help = "Switch to the stock Canon shooting screen in photo mode.",
                 .help2 = "ML overlays (zebras, focus peak, cropmarks...) come back\n"
                          "automatically as soon as you switch to movie mode.",
@@ -3941,10 +3917,53 @@ static struct menu_entry photo_mode_settings_menus[] = {
                 .choices = CHOICES("OFF", "ON"),
                 .update     = gd_photo_canon_ui_review_display,
                 .edit_mode = EM_INLINE_ADJUST,
+                .depends_on = DEP_PHOTO_MODE,
                 .help = "Switch to the stock Canon playback/review screen in photo mode.",
                 .help2 = "ML overlays come back automatically as soon as\n"
                          "you switch to movie mode.",
             },
+#if defined(FEATURE_GLOBAL_DRAW) && defined(FEATURE_ZEBRA)
+            {
+                .name = "Zebras in Canon UI",
+                .priv = &zebra_canon_ui_override,
+                .max = 1,
+                .icon_type = IT_BOOL,
+                .choices = CHOICES("OFF", "ON"),
+                .update = zebra_canon_ui_override_display,
+                .edit_mode = EM_INLINE_ADJUST,
+                .depends_on = DEP_PHOTO_MODE,
+                .help = "Keep zebras visible over the stock Canon photo shooting screen.",
+                .help2 = "Independent from the main Zebras setting.",
+            },
+#endif
+#if defined(FEATURE_GLOBAL_DRAW) && defined(FEATURE_FOCUS_PEAK)
+            {
+                .name = "Focus Peak in Canon UI",
+                .priv = &focus_peak_canon_ui_override,
+                .max = 1,
+                .icon_type = IT_BOOL,
+                .choices = CHOICES("OFF", "ON"),
+                .update = focus_peak_canon_ui_override_display,
+                .edit_mode = EM_INLINE_ADJUST,
+                .depends_on = DEP_PHOTO_MODE,
+                .help = "Keep focus peaking visible over the stock Canon photo shooting screen.",
+                .help2 = "Independent from the main Focus Peak setting.",
+            },
+#endif
+#if defined(FEATURE_GLOBAL_DRAW) && defined(FEATURE_HISTOGRAM)
+            {
+                .name = "Histogram in Canon UI",
+                .priv = &hist_canon_ui_override,
+                .max = 1,
+                .icon_type = IT_BOOL,
+                .choices = CHOICES("OFF", "ON"),
+                .update = hist_canon_ui_override_display,
+                .edit_mode = EM_INLINE_ADJUST,
+                .depends_on = DEP_PHOTO_MODE,
+                .help = "Keep the histogram visible over the stock Canon photo shooting screen.",
+                .help2 = "This is the photo-mode Canon UI histogram exception.",
+            },
+#endif
             MENU_EOL
         },
     },
