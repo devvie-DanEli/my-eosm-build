@@ -93,6 +93,11 @@ struct lens_info
 
 extern struct lens_info lens_info;
 
+#ifdef CONFIG_EOSM
+/* Keep independent ISO/shutter states for photo and movie mode. */
+void photo_video_exposure_mode_changed(int old_mode, int new_mode);
+#endif
+
 #define DOF_DIFFRACTION_LIMIT_REACHED 1
 
 #if defined(CONFIG_6D) || defined(CONFIG_5D3_123) || defined(CONFIG_100D) || defined(CONFIG_70D)

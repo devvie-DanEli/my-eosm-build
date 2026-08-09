@@ -332,8 +332,13 @@ static unsigned int isoless_refresh(unsigned int ctx)
     /* Single-ISO LV preview when idle; FRAME dual ISO only while recording RAW. */
     int need_dual_lv = isoless_hdr && raw_mv && FRAME_CMOS_ISO_START && lv_dispsize != 10 && RECORDING_RAW;
 
-    int need_dual_ph = isoless_hdr && raw_ph && PHOTO_CMOS_ISO_START
+    /* EOS M custom build: Dual ISO is video-only. Do not patch the photo
+     * CMOS registers, even if the module/config was previously enabled. */
+    int need_dual_ph = 0;
+#if !defined(CONFIG_EOSM)
+    need_dual_ph = isoless_hdr && raw_ph && PHOTO_CMOS_ISO_START
         && ((get_shooting_card()->file_number % 2) || !isoless_alternate);
+#endif
     
     if (enabled_lv && (setting_changed || lv_dispsize == 10 || !need_dual_lv))
     {
@@ -399,6 +404,11 @@ end:
 
 int dual_iso_set_enabled(bool enabled)
 {
+#if defined(CONFIG_EOSM)
+    if (!is_movie_mode())
+        enabled = 0;
+#endif
+
     if (enabled)
         isoless_hdr = 1; 
     else
@@ -410,11 +420,17 @@ int dual_iso_set_enabled(bool enabled)
 
 int dual_iso_is_enabled()
 {
+#if defined(CONFIG_EOSM)
+    if (!is_movie_mode()) return 0;
+#endif
     return isoless_hdr;
 }
 
 int dual_iso_is_active()
 {
+#if defined(CONFIG_EOSM)
+    if (!is_movie_mode()) return 0;
+#endif
     return is_movie_mode() ? enabled_lv : enabled_ph;
 }
 
@@ -843,6 +859,17 @@ int dual_iso_slim_step_recovery(int delta)
 
 static MENU_UPDATE_FUNC(isoless_update)
 {
+#if defined(CONFIG_EOSM)
+    if (!is_movie_mode())
+    {
+        isoless_hdr = 0;
+        MENU_SET_VALUE("OFF");
+        MENU_SET_ENABLED(0);
+        MENU_SET_WARNING(MENU_WARN_INFO, "Dual ISO is available only in video mode on this EOS M build.");
+        return;
+    }
+#endif
+
     static int last_primary = -1;
     int primary = slim_dual_primary_iso();
     int n = slim_dual_valid_count(primary);
@@ -906,6 +933,9 @@ static struct menu_entry isoless_expo_menu[] =
         .max = 1,
         .help  = "Alternate ISO for every 2 sensor scan lines.",
         .help2 = "Clean preview when idle; dual ISO in RAW while recording.",
+#ifdef CONFIG_EOSM
+        .depends_on = DEP_MOVIE_MODE,
+#endif
         .edit_mode = EM_INLINE_ADJUST,
     },
 };
