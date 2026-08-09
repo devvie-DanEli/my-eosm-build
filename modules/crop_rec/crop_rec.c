@@ -512,6 +512,14 @@ static int slim_handle_info_button(unsigned int key)
 {
     if (!is_EOSM || key != MODULE_KEY_INFO)
         return 0;
+
+    /* The INFO shortcut is deliberately a movie-mode-only feature on EOS M.
+     * In photo mode Canon must receive INFO so its native shooting display can
+     * cycle normally, and a saved Dual ISO/overlay shortcut must never leak
+     * into the photo UI. */
+    if (!is_movie_mode())
+        return 0;
+
     if (!INFO_button)
         return 0; /* OFF — Canon INFO / LV cycle */
 
@@ -5668,8 +5676,9 @@ static struct menu_entry slim_info_button_menu[] = {
         .edit_mode = EM_INLINE_ADJUST,
         .update    = slim_info_button_update,
         .icon_type = IT_DICE,
-        .help      = "Assign INFO to an overlay, framing, or the Quick Panel.",
-        .help2     = "OFF uses Canon INFO. Idle LV: long-press INFO (or double-press) opens last setting.",
+        .depends_on = DEP_MOVIE_MODE,
+        .help      = "Assign INFO to an ML shortcut in movie mode.",
+        .help2     = "Disabled in photo mode. OFF uses Canon INFO. Idle movie LV: long-press INFO (or double-press) opens the last setting.",
     },
     {
         .name      = "SET Button",
@@ -7045,6 +7054,7 @@ static struct menu_entry customize_buttons_menu[] =
 #ifdef CONFIG_SLIM_MENUS
                 .max      = 7,
                 .choices  = CHOICES("OFF", "Zoom x10", "ISO", "Aperture -", "Dual ISO", "False color", "Shutter Expo", "Aperture Expo"),
+                .depends_on = DEP_MOVIE_MODE,
 #else
                 .max      = 8,
                 .choices  = CHOICES("OFF", "Zoom x10", "ISO", "Aperture -", "Dual ISO", "False color", "Shutter Expo", "Aperture Expo", "ISO Expo"),

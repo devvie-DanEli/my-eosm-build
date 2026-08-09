@@ -286,7 +286,13 @@ static int slim_touch_lv_direct_editor(struct event * event)
 
 static int slim_touch_lv_context_ok(void)
 {
-    return lv && is_movie_mode() && !RECORDING &&
+    /*
+     * EOS M slim: the same LV touch editor is available in photo and movie
+     * Live View.  The photo-mode hit-test below restricts it to the three
+     * camera exposure fields (ISO, shutter, aperture); movie mode retains
+     * the existing crop/FPS/bit-depth controls.
+     */
+    return lv && !RECORDING &&
            !gui_menu_shown() && lv_dispsize != 10 &&
            !slim_crop_rec_transition_busy();
 }

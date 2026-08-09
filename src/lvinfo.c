@@ -35,6 +35,7 @@ static char lvinfo_touch_menu_value[2][32];
 static int lvinfo_touch_menu_enabled[2] = { 1, 1 };
 static int lvinfo_touch_feedback_slot = -1;
 static int lvinfo_touch_feedback_sign;
+static int lvinfo_photo_overlay_mode(void);
 
 /* The single-value editor is square.  Crop mode + resolution share a wider
  * rectangle with the same height.  Input uses these exact bounds too. */
@@ -145,7 +146,8 @@ static void lvinfo_touch_draw_editor(void)
 
     if (lvinfo_touch_field == LVINFO_TOUCH_CROP)
     {
-        bmp_fill(COLOR_BLACK, LVINFO_TOUCH_CROP_X, LVINFO_TOUCH_BOX_Y,
+        bmp_fill(lvinfo_photo_overlay_mode() ? COLOR_EMPTY : COLOR_BLACK,
+                 LVINFO_TOUCH_CROP_X, LVINFO_TOUCH_BOX_Y,
                  LVINFO_TOUCH_CROP_W, LVINFO_TOUCH_BOX_H);
         lvinfo_touch_draw_value(0, 232, value_y, lvinfo_touch_menu_value[0],
                                 lvinfo_touch_menu_enabled[0]);
@@ -163,7 +165,8 @@ static void lvinfo_touch_draw_editor(void)
             (lvinfo_touch_field == LVINFO_TOUCH_FPS ||
              lvinfo_touch_field == LVINFO_TOUCH_BIT_DEPTH)
             ? lvinfo_touch_menu_enabled[0] : 1;
-        bmp_fill(COLOR_BLACK, LVINFO_TOUCH_SINGLE_X, LVINFO_TOUCH_BOX_Y,
+        bmp_fill(lvinfo_photo_overlay_mode() ? COLOR_EMPTY : COLOR_BLACK,
+                 LVINFO_TOUCH_SINGLE_X, LVINFO_TOUCH_BOX_Y,
                  LVINFO_TOUCH_SINGLE_W, LVINFO_TOUCH_BOX_H);
         lvinfo_touch_draw_value(0, 360, value_y, value, enabled);
     }
@@ -548,10 +551,21 @@ void lvinfo_refresh_layout()
     lvinfo_justify_items(bot_items, bot_count, TOTAL_WIDTH);
 }
 
+static int lvinfo_photo_overlay_mode()
+{
+    /*
+     * EOS M slim: in photo Live View the ML status bars are overlay text,
+     * not opaque top/bottom bands.  COLOR_EMPTY leaves Canon's Live View
+     * image underneath while the ML text remains visible.
+     */
+    return lv && !is_movie_mode() && !gui_menu_shown();
+}
+
 static REQUIRES(lvinfo_sem)
 void lvinfo_display_bar(struct lvinfo_item * items[], int count, int bar_x, int bar_y, int bar_width, int bar_height)
 {
-    int default_bg = FONT_BG(default_font);
+    const int transparent = lvinfo_photo_overlay_mode();
+    int default_bg = transparent ? COLOR_EMPTY : FONT_BG(default_font);
     int default_bg_out = (default_bg == COLOR_BG_DARK ? 0 : default_bg);
     int touch_hx0 = -1;
     int touch_hy0 = -1;
@@ -594,12 +608,14 @@ void lvinfo_display_bar(struct lvinfo_item * items[], int count, int bar_x, int 
         if (prev_right >= 0 && now_left > prev_right)
         {
             int gap = now_left - prev_right + 1;
-            bmp_fill(prev_bg, prev_right, y0, gap/2, bar_height);
-            bmp_fill(bg, prev_right+gap/2, y0, gap/2, bar_height);
+            bmp_fill(transparent ? COLOR_EMPTY : prev_bg,
+                      prev_right, y0, gap/2, bar_height);
+            bmp_fill(transparent ? COLOR_EMPTY : bg,
+                      prev_right+gap/2, y0, gap/2, bar_height);
         }
 
         /* clear the space for current box */
-        bmp_fill(bg, x0, y0, w, bar_height);
+        bmp_fill(transparent ? COLOR_EMPTY : bg, x0, y0, w, bar_height);
         
         /* for debugging: show the center of each item */
         //~ bmp_fill(COLOR_RED, x-1, y0-2, 2, 2);
@@ -639,8 +655,10 @@ void lvinfo_display_bar(struct lvinfo_item * items[], int count, int bar_x, int 
     {
         int now_left = TOTAL_WIDTH;
         int gap = now_left - prev_right;
-        bmp_fill(prev_bg, prev_right, bar_y, gap / 2, bar_height);
-        bmp_fill(default_bg_out, prev_right + gap / 2, bar_y, gap / 2, bar_height);
+        bmp_fill(transparent ? COLOR_EMPTY : prev_bg,
+                  prev_right, bar_y, gap / 2, bar_height);
+        bmp_fill(transparent ? COLOR_EMPTY : default_bg_out,
+                  prev_right + gap / 2, bar_y, gap / 2, bar_height);
     }
 
     /* Draw selection last.  Gap and neighboring-item background fills used
@@ -658,8 +676,17 @@ void lvinfo_align_and_display(struct lvinfo_item * items[], int count, int bar_x
     
     /* choose a default font */
     /* try to borrow the color from the cropmarks; if it's fully transparent, use transparent gray */
-    int bg = (items == top_items) ? TOPBAR_BGCOLOR : BOTTOMBAR_BGCOLOR;
-    if (bg == 0) bg = COLOR_BG_DARK;
+    int bg;
+    if (lvinfo_photo_overlay_mode())
+    {
+        /* Photo mode: no opaque top/bottom bars, text only. */
+        bg = COLOR_EMPTY;
+    }
+    else
+    {
+        bg = (items == top_items) ? TOPBAR_BGCOLOR : BOTTOMBAR_BGCOLOR;
+        if (bg == 0) bg = COLOR_BG_DARK;
+    }
     default_font = FONT(default_font, COLOR_WHITE, bg);
     small_font = FONT(small_font, COLOR_WHITE, bg);
     
@@ -805,6 +832,17 @@ enum lvinfo_touch_field lvinfo_touch_field_at(int x, int y)
             else if (!strcmp(name, "Crop info")) candidate = LVINFO_TOUCH_CROP;
             else if (!strcmp(name, "FPS")) candidate = LVINFO_TOUCH_FPS;
             else if (!strcmp(name, "Bitdepth info")) candidate = LVINFO_TOUCH_BIT_DEPTH;
+
+            /*
+             * Photo Live View intentionally exposes only ISO, shutter and
+             * aperture.  Movie mode keeps the existing crop/FPS/bit-depth
+             * touch controls.
+             */
+            if (!is_movie_mode() &&
+                candidate != LVINFO_TOUCH_APERTURE &&
+                candidate != LVINFO_TOUCH_SHUTTER &&
+                candidate != LVINFO_TOUCH_ISO)
+                continue;
 
             /* Expanded targets may overlap; the closest visible field wins. */
             if (candidate != LVINFO_TOUCH_NONE && distance < best_distance)
