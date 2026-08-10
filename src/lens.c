@@ -1410,11 +1410,8 @@ static int video_saved_valid = 0;
 static volatile int photo_video_exposure_restore_pending = 0;
 static volatile int photo_video_exposure_restore_movie = 0;
 
-void photo_video_exposure_mode_changed(int old_mode, int new_mode)
+void photo_video_exposure_mode_changed_bool(int old_movie, int new_movie)
 {
-    int old_movie = (old_mode == SHOOTMODE_MOVIE);
-    int new_movie = (new_mode == SHOOTMODE_MOVIE);
-
     if (old_movie == new_movie)
         return;
 
@@ -1436,6 +1433,43 @@ void photo_video_exposure_mode_changed(int old_mode, int new_mode)
         photo_video_exposure_restore_movie = new_movie;
         photo_video_exposure_restore_pending = 1;
     }
+}
+
+void photo_video_exposure_mode_changed(int old_mode, int new_mode)
+{
+    /* Kept for source compatibility (some callers still pass raw
+     * PROP_SHOOTING_MODE_2 values). On EOS M this camera has no
+     * dedicated Movie position on that property - is_movie_mode() here
+     * is actually driven by PROP_LV_MOVIE_SELECT (see the PROP_HANDLER
+     * below), so this SHOOTMODE_MOVIE comparison is not the real
+     * trigger and is normally a no-op. */
+    int old_movie = (old_mode == SHOOTMODE_MOVIE);
+    int new_movie = (new_mode == SHOOTMODE_MOVIE);
+    photo_video_exposure_mode_changed_bool(old_movie, new_movie);
+}
+
+/* The actual photo/movie transition signal on EOS M: the dedicated
+ * Movie switch, not PROP_SHOOTING_MODE_2 (this platform defines
+ * CONFIG_NO_DEDICATED_MOVIE_MODE, so is_movie_mode() itself is based
+ * on lv_movie_select == LVMS_ENABLE_MOVIE). Track our own last-known
+ * state rather than relying on lv_movie_select's own PROP_INT handler
+ * (in propvalues.c) having already run first - handler execution order
+ * between files isn't guaranteed. */
+static int photo_video_last_movie_state = -1;
+
+PROP_HANDLER(PROP_LV_MOVIE_SELECT)
+{
+    int new_movie = (buf[0] == LVMS_ENABLE_MOVIE);
+
+    if (photo_video_last_movie_state != -1 &&
+        photo_video_last_movie_state != new_movie)
+    {
+        photo_video_exposure_mode_changed_bool(
+            photo_video_last_movie_state, new_movie);
+        photo_canon_ui_mode_changed();
+    }
+
+    photo_video_last_movie_state = new_movie;
 }
 
 static void photo_video_exposure_task(void *unused)

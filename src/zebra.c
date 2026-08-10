@@ -4899,6 +4899,24 @@ livev_hipriority_task( void* unused )
         }
         #endif
 
+        #ifdef CONFIG_EOSM
+        {
+            /* Canon's own GUI (its composition grid included) can briefly
+             * re-take the front buffer on user input - e.g. "Kill Canon
+             * GUI: idle only" hands it back the moment the screen isn't
+             * idle, which shows up as grid lines flickering in and out
+             * while navigating in photo mode. ML's overlay is meant to
+             * own the photo-mode shooting screen continuously, so keep
+             * re-asserting control every frame rather than leaving it to
+             * the idle-only heuristic. */
+            if (lv && !is_movie_mode() && !RECORDING && !gui_menu_shown() &&
+                !canon_gui_front_buffer_disabled())
+            {
+                canon_gui_disable_front_buffer();
+            }
+        }
+        #endif
+
         while (is_mvr_buffer_almost_full())
         {
             msleep(100);
@@ -5281,24 +5299,6 @@ int handle_disp_preset_key(struct event * event)
 }
 
 #ifdef FEATURE_OVERLAYS_IN_PLAYBACK_MODE
-#ifdef CONFIG_EOSM
-/* EOS M video LV normally keeps Canon's bitmap/front buffer suppressed for ML.
- * When the user enters Canon playback, however, the stock playback controls
- * (including previous/next, exact/all, and delete) must be allowed to draw.
- * Restore that state after Canon has completed the PLAY transition. */
-static void eosm_restore_canon_playback_ui()
-{
-    if (!PLAY_MODE)
-        return;
-
-    extern int kill_canon_gui_mode;
-    kill_canon_gui_mode = 0;
-    canon_gui_enable_front_buffer(0);
-    bmp_on();
-    redraw();
-}
-#endif
-
 static int overlays_playback_displayed = 0;
 
 static void overlays_playback_clear()
@@ -5330,6 +5330,38 @@ static void overlays_playback_toggle()
         overlays_playback_clear();
     }
 }
+
+#ifdef CONFIG_EOSM
+/* EOS M video LV normally keeps Canon's bitmap/front buffer suppressed for ML.
+ * When the user enters Canon playback, however, the stock playback controls
+ * (including previous/next, exact/all, and delete) must be allowed to draw -
+ * needed in both photo and movie review, since they live in the same Canon
+ * front buffer that's suppressed during movie LiveView.
+ * Restore that state after Canon has completed the PLAY transition. */
+static void eosm_restore_canon_playback_ui()
+{
+    if (!PLAY_MODE)
+        return;
+
+    extern int kill_canon_gui_mode;
+    kill_canon_gui_mode = 0;
+    canon_gui_enable_front_buffer(0);
+    bmp_on();
+    redraw();
+
+    if (is_movie_mode())
+    {
+        /* Movie clip review: bring back ML's own playback screen
+         * (zebra/histogram/etc drawn over the frame) instead of leaving
+         * it plain Canon. Nav (prev/next) and delete still work as
+         * normal, since Canon's own front buffer/dialog handling was
+         * just restored above - ML's overlay simply draws on top of it,
+         * same as it always has for the toggle button/QuickReview path. */
+        overlays_playback_displayed = 0;
+        overlays_playback_toggle();
+    }
+}
+#endif
 
 int handle_overlays_playback(struct event * event)
 {

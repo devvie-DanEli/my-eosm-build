@@ -126,9 +126,10 @@ volatile PROP_INT(PROP_SHOOTING_MODE, shooting_mode_custom);
 
 PROP_HANDLER(PROP_SHOOTING_MODE_2)
 {
-    #ifdef CONFIG_EOSM
-    photo_video_exposure_mode_changed(shooting_mode, buf[0]);
-    #endif
+    /* NOTE: on EOS M this property does not carry a dedicated Movie
+     * value (CONFIG_NO_DEDICATED_MOVIE_MODE is set - see
+     * PROP_HANDLER(PROP_LV_MOVIE_SELECT) in lens.c for the real photo/
+     * movie transition signal and the exposure-memory hook). */
 
     shooting_mode = buf[0];
 
