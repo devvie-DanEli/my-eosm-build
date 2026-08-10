@@ -2211,8 +2211,11 @@ unsigned int raw_rec_polling_cbr(unsigned int unused)
     raw_lv_request_update();
 
     /* Keep Crop Mood's EOS M state synchronized even when RAW is changed from
-     * the ML menu/settings instead of the LiveView touch target. */
-    if (is_EOSM && last_raw_video_enabled != raw_video_enabled)
+     * the ML menu/settings instead of the LiveView touch target.
+     * This code is compiled only for EOS M; the old generic mlv_lite code
+     * does not provide an is_EOSM variable. */
+#ifdef CONFIG_EOSM
+    if (last_raw_video_enabled != raw_video_enabled)
     {
         if (!raw_video_enabled && crop_rec_disable_for_h264)
             crop_rec_disable_for_h264();
@@ -2220,6 +2223,7 @@ unsigned int raw_rec_polling_cbr(unsigned int unused)
             crop_rec_enable_for_raw();
         last_raw_video_enabled = raw_video_enabled;
     }
+#endif
 
     /* auto-disable raw video in photo mode or outside LiveView */
     int raw_video_active = raw_video_enabled && lv && is_movie_mode();
