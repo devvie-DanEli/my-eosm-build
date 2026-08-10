@@ -64,7 +64,11 @@ static CONFIG_INT("crop.preset", crop_preset_index, 2);
 static CONFIG_INT("crop.shutter_range", shutter_range, 0);
 static CONFIG_INT("crop.fix_dual_iso_flicker", fix_dual_iso_flicker, 1);
 static int (*raw_video_is_enabled)(void) = MODULE_FUNCTION(raw_video_is_enabled);
+static int (*raw_video_transition_busy)(void) = MODULE_FUNCTION(raw_video_transition_busy);
 static volatile int slim_h264_mode = 0;
+#ifdef CONFIG_EOSM
+static volatile int slim_raw_transition_wait = 0;
+#endif
 
 static int crop_raw_mode_available(void)
 {
@@ -5066,17 +5070,11 @@ void crop_rec_disable_for_h264(void)
     if (!is_EOSM)
         return;
 
-    /*
-     * Do not call update_patch() directly from the GUI/touch callback.
-     * update_patch() installs/uninstalls memory hooks and is designed to run
-     * from Canon's LV property transitions. Doing that synchronously while
-     * MLV is releasing its RAW LV buffers can leave the H.264 path in a
-     * partially transitioned state and can crash on record start.
-     *
-     * Mark the H.264 state first, then use the normal LV zoom/property path to
-     * make Canon invoke update_patch() safely.
-     */
+    /* This function is now called only after raw_lv_is_enabled() has become
+     * false.  The RAW recorder has therefore released its live RAW buffer
+     * relationship before Crop Mood uninstalls any preview hooks. */
     slim_h264_mode = 1;
+    slim_raw_transition_wait = 0;
     /* Keep the user's selected RAW crop preset stored. It is merely
      * inactive while H.264 is selected and becomes available again when RAW
      * LiveView is fully re-enabled. */
@@ -5100,6 +5098,12 @@ void crop_rec_enable_for_raw(void)
     if (!is_EOSM)
         return;
     slim_h264_mode = 0;
+#ifdef CONFIG_EOSM
+    /* RAW LV is now genuinely enabled.  Re-enter the existing EOS M LV guard
+     * instead of installing crop hooks directly in the RAW toggle path. */
+    slim_raw_transition_wait = 1;
+    eosm_lv_guard_request();
+#endif
     crop_set_dirty(10);
     lens_display_set_dirty();
     redraw_after(150);
@@ -7390,6 +7394,7 @@ static void eosm_lv_guard_clear(void)
 {
     eosm_lv_guard_pending = 0;
     eosm_lv_guard_busy = 0;
+    slim_raw_transition_wait = 0;
     crop_rec_lv_dirty = 0;
     settings_changed = 0;
 }
@@ -7856,6 +7861,18 @@ static unsigned int crop_rec_keypress_cbr(unsigned int key)
          key == MODULE_KEY_WHEEL_LEFT || key == MODULE_KEY_WHEEL_RIGHT ||
          key == MODULE_KEY_INFO))
         return 0;
+
+    /* Do not let Canon H.264/RAW recording start while the RAW request is
+     * still crossing the Live View state machine. This is a state guard, not
+     * a fixed delay: it clears only after the underlying RAW state and, on
+     * RAW re-entry, the EOS M crop pipeline are ready. */
+    if (key == MODULE_KEY_REC && !RECORDING &&
+        ((raw_video_transition_busy && raw_video_transition_busy()) ||
+         slim_raw_transition_wait))
+    {
+        NotifyBox(1200, "Changing RAW/H.264 - please wait");
+        return 0;
+    }
 #endif
 
     /* Close the touch editor at the REC press itself, before the asynchronous
