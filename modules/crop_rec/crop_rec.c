@@ -5077,7 +5077,9 @@ void crop_rec_disable_for_h264(void)
      * make Canon invoke update_patch() safely.
      */
     slim_h264_mode = 1;
-    crop_preset_index = 0;
+    /* Keep the user's selected RAW crop preset stored. It is merely
+     * inactive while H.264 is selected and becomes available again when RAW
+     * LiveView is fully re-enabled. */
     crop_preset = CROP_PRESET_OFF;
     slim_mode_ui = 0;
     slim_unified_preset = 0;
@@ -5106,6 +5108,28 @@ void crop_rec_enable_for_raw(void)
 
 static void update_patch()
 {
+#ifdef CONFIG_EOSM
+    /* EOS M slim Crop Mood is a RAW-only pipeline.  Do not install or
+     * re-install its sensor/preview hooks while Canon H.264 is selected,
+     * and do not install them until the RAW LiveView stream is actually
+     * enabled.  This avoids crossing the MLV RAW teardown/startup boundary
+     * with crop_rec's memory hooks, which can crash the next record start. */
+    if (is_EOSM && (slim_h264_mode || !raw_lv_is_enabled()))
+    {
+        if (patch_active)
+        {
+            uninstall_patches();
+            patch_active = 0;
+        }
+        extern int kill_canon_gui_mode;
+        if (slim_h264_mode)
+            /* Keep the normal ML video bitmap/overlay path active in H.264. */
+            kill_canon_gui_mode = 1;
+        crop_preset = 0;
+        return;
+    }
+#endif
+
     if (CROP_PRESET_MENU)
     {
         /* update preset */
