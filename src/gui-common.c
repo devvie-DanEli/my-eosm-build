@@ -92,6 +92,8 @@ static int (*crop_rec_lv_transition_busy)() =
 static int (*dual_iso_is_enabled)() = MODULE_FUNCTION(dual_iso_is_enabled);
 static int (*dual_iso_slim_step_recovery)(int) =
     MODULE_FUNCTION(dual_iso_slim_step_recovery);
+static int (*raw_video_touch_hit)(int, int) =
+    MODULE_FUNCTION(raw_video_touch_hit);
 
 static int slim_touch_dual_iso_enabled(void)
 {
@@ -249,6 +251,9 @@ static int slim_touch_lv_direct_editor(struct event * event)
     if (monitoring_graph_touch_toggle(x, y))
         return 1;
 
+    if (raw_video_touch_hit && raw_video_touch_hit(x, y))
+        return 1;
+
     if (lvinfo_touch_editor_is_open())
     {
         enum lvinfo_touch_field field = lvinfo_touch_editor_field();
@@ -300,6 +305,15 @@ static int slim_touch_lv_context_ok(void)
 static void slim_touch_open_for_taps(int taps)
 {
     if (!slim_touch_lv_context_ok() || lvinfo_touch_editor_is_open())
+        return;
+
+    /* The Quick Panel (tap-to-open) is a fixed 8-item grid tuned for movie
+     * shooting - Movie Mode / Aspect Ratio / Resolution / Frame Rate
+     * alongside WB/Shutter/Aperture/ISO. It has no photo-mode layout, so
+     * keep it movie-only; a blank-space tap in photo mode does nothing
+     * (the ISO/shutter/aperture fields still have their own direct
+     * editor, handled separately in slim_touch_lv_direct_editor). */
+    if (!is_movie_mode())
         return;
 
     if (taps == 1)
