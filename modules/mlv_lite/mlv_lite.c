@@ -165,6 +165,7 @@ static const char * aspect_ratio_choices[] =       {"5:1","4:1","3:1","2.67:1","
 
 CONFIG_INT("raw.video.enabled", raw_video_enabled, 1);
 static void (*crop_rec_disable_for_h264)(void) = MODULE_FUNCTION(crop_rec_disable_for_h264);
+static void (*crop_rec_enable_for_raw)(void) = MODULE_FUNCTION(crop_rec_enable_for_raw);
 
 /* Card spanning */
 static CONFIG_INT("raw.card_spanning", card_spanning, 0);
@@ -2181,13 +2182,21 @@ int raw_video_touch_hit(int x, int y)
 
     raw_video_enabled = !raw_video_enabled;
 
-    /* Switching RAW -> H.264 must tear down crop-rec's RAW-only patch state
-     * before Canon's next video configuration is used.  Switching back to
-     * RAW leaves the existing crop configuration available for the user. */
+    /*
+     * RAW -> H.264: mark Crop Mood inactive and let the normal LV transition
+     * remove its hardware hooks. Do not touch crop registers directly from
+     * the GUI task.
+     *
+     * H.264 -> RAW: release the H.264-only UI state so the user's stored RAW
+     * crop configuration becomes available again.
+     */
     if (!raw_video_enabled && crop_rec_disable_for_h264)
         crop_rec_disable_for_h264();
+    else if (raw_video_enabled && crop_rec_enable_for_raw)
+        crop_rec_enable_for_raw();
 
     lens_display_set_dirty();
+    redraw_after(300);
     redraw();
     return 1;
 }
@@ -2197,7 +2206,20 @@ unsigned int raw_rec_polling_cbr(unsigned int unused)
 {
     if (!compress_mq) return 0;
 
+    static int last_raw_video_enabled = -1;
+
     raw_lv_request_update();
+
+    /* Keep Crop Mood's EOS M state synchronized even when RAW is changed from
+     * the ML menu/settings instead of the LiveView touch target. */
+    if (is_EOSM && last_raw_video_enabled != raw_video_enabled)
+    {
+        if (!raw_video_enabled && crop_rec_disable_for_h264)
+            crop_rec_disable_for_h264();
+        else if (raw_video_enabled && crop_rec_enable_for_raw)
+            crop_rec_enable_for_raw();
+        last_raw_video_enabled = raw_video_enabled;
+    }
 
     /* auto-disable raw video in photo mode or outside LiveView */
     int raw_video_active = raw_video_enabled && lv && is_movie_mode();

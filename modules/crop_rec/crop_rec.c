@@ -64,6 +64,7 @@ static CONFIG_INT("crop.preset", crop_preset_index, 2);
 static CONFIG_INT("crop.shutter_range", shutter_range, 0);
 static CONFIG_INT("crop.fix_dual_iso_flicker", fix_dual_iso_flicker, 1);
 static int (*raw_video_is_enabled)(void) = MODULE_FUNCTION(raw_video_is_enabled);
+static volatile int slim_h264_mode = 0;
 
 static int crop_raw_mode_available(void)
 {
@@ -5065,24 +5066,43 @@ void crop_rec_disable_for_h264(void)
     if (!is_EOSM)
         return;
 
+    /*
+     * Do not call update_patch() directly from the GUI/touch callback.
+     * update_patch() installs/uninstalls memory hooks and is designed to run
+     * from Canon's LV property transitions. Doing that synchronously while
+     * MLV is releasing its RAW LV buffers can leave the H.264 path in a
+     * partially transitioned state and can crash on record start.
+     *
+     * Mark the H.264 state first, then use the normal LV zoom/property path to
+     * make Canon invoke update_patch() safely.
+     */
+    slim_h264_mode = 1;
     crop_preset_index = 0;
     crop_preset = CROP_PRESET_OFF;
     slim_mode_ui = 0;
     slim_unified_preset = 0;
 
-    update_patch();
-
     if (lv && is_movie_mode() && !RECORDING)
-    {
         set_zoom(1);
-    }
 
     crop_set_dirty(10);
     vram_params_set_dirty();
     lens_display_set_dirty();
-    redraw();
+    redraw_after(250);
 #endif
 }
+
+#ifdef CONFIG_EOSM
+void crop_rec_enable_for_raw(void)
+{
+    if (!is_EOSM)
+        return;
+    slim_h264_mode = 0;
+    crop_set_dirty(10);
+    lens_display_set_dirty();
+    redraw_after(150);
+}
+#endif
 
 static void update_patch()
 {
@@ -5140,10 +5160,19 @@ static void update_patch()
             extern int kill_canon_gui_mode;
             if (kill_canon_gui_mode != 0)
             {
-                kill_canon_gui_mode = 0;
-                if (canon_gui_front_buffer_disabled())
+                /*
+                 * In EOS M slim H.264 mode the ML LiveView overlay remains the
+                 * active UI. Do not restore Canon's bitmap/front buffer here,
+                 * otherwise all of the ML info fields disappear immediately
+                 * after RAW -> H.264.
+                 */
+#ifdef CONFIG_EOSM
+                if (!(is_EOSM && slim_h264_mode))
+#endif
                 {
-                    canon_gui_enable_front_buffer(0);
+                    kill_canon_gui_mode = 0;
+                    if (canon_gui_front_buffer_disabled())
+                        canon_gui_enable_front_buffer(0);
                 }
             }
 
