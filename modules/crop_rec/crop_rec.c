@@ -5083,7 +5083,9 @@ void crop_rec_disable_for_h264(void)
     slim_unified_preset = 0;
 
     if (lv && is_movie_mode() && !RECORDING)
-        set_zoom(1);
+        /* EOS M normal movie LiveView is x5; x1 is the still-photo base.
+         * Return to x5 before Canon H.264 recording can start. */
+        set_zoom(5);
 
     crop_set_dirty(10);
     vram_params_set_dirty();
@@ -5127,8 +5129,16 @@ static void update_patch()
         }
         extern int kill_canon_gui_mode;
         if (slim_h264_mode)
-            /* Keep the normal ML video bitmap/overlay path active in H.264. */
-            kill_canon_gui_mode = 1;
+        {
+            /* H.264 is the camera's normal movie recording path.  Do not
+             * leave the Canon front-buffer suppression from RAW/crop mode
+             * active here: Canon must be allowed to restore its normal movie
+             * display/recording path, while ML Global Draw continues to paint
+             * the ML overlay on top. */
+            kill_canon_gui_mode = 0;
+            if (canon_gui_front_buffer_disabled())
+                canon_gui_enable_front_buffer(0);
+        }
         crop_preset = 0;
         return;
     }

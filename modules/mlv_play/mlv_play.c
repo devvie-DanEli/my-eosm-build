@@ -729,23 +729,6 @@ static uint32_t mlv_play_osd_draw()
     return redraw;
 }
 
-/* The EOS M Canon playback screen can consume the first SET event while
- * entering PLAY mode.  Keep a small direct trigger in the module CBR path so
- * the ML playback controls are visible even when the normal queued SET event
- * is swallowed by Canon's transition handling. */
-static void mlv_play_osd_force_show()
-{
-    if (mlv_play_osd_state == MLV_PLAY_MENU_IDLE ||
-        mlv_play_osd_state == MLV_PLAY_MENU_HIDDEN ||
-        mlv_play_osd_state == MLV_PLAY_MENU_FADEOUT)
-    {
-        mlv_play_osd_item = MIN(mlv_play_osd_item, COUNT(mlv_play_osd_items) - 1);
-        mlv_play_osd_state = MLV_PLAY_MENU_FADEIN;
-        mlv_play_osd_force_redraw = 0;
-        redraw();
-    }
-}
-
 static void mlv_play_osd_act(void *handler)
 {
     int entry = 0;
@@ -765,12 +748,7 @@ static void mlv_play_osd_task(void *priv)
 {
     uint32_t next_render_time = get_ms_clock() + mlv_play_render_timestep;
  
-    /* Start playback with the ML navigation OSD visible.  On EOS M the first
-     * SET event can be consumed by Canon while entering PLAY mode, so relying
-     * on SET as the only way to reveal the controls leaves the user with only
-     * the filename/path bar.  SET and the wheel still work normally after the
-     * OSD is shown. */
-    mlv_play_osd_state = MLV_PLAY_MENU_FADEIN;
+    mlv_play_osd_state = MLV_PLAY_MENU_IDLE;
     mlv_play_osd_item = 1;
     mlv_play_paused = 0;   
     
@@ -2823,15 +2801,6 @@ static unsigned int mlv_play_keypress_cbr(unsigned int key)
             }
 
             case MODULE_KEY_PRESS_SET:
-            {
-                /* SET is the explicit "show controls" action requested by
-                 * the EOS M slim UI.  Trigger the visual state immediately,
-                 * then keep the normal queue handling below for selection. */
-                mlv_play_osd_force_show();
-                msg_queue_post(mlv_play_queue_osd, (uint32_t) key);
-                return 0;
-            }
-
             case MODULE_KEY_WHEEL_UP:
             case MODULE_KEY_WHEEL_DOWN:
             case MODULE_KEY_WHEEL_LEFT:
