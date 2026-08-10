@@ -765,7 +765,12 @@ static void mlv_play_osd_task(void *priv)
 {
     uint32_t next_render_time = get_ms_clock() + mlv_play_render_timestep;
  
-    mlv_play_osd_state = MLV_PLAY_MENU_IDLE;
+    /* Start playback with the ML navigation OSD visible.  On EOS M the first
+     * SET event can be consumed by Canon while entering PLAY mode, so relying
+     * on SET as the only way to reveal the controls leaves the user with only
+     * the filename/path bar.  SET and the wheel still work normally after the
+     * OSD is shown. */
+    mlv_play_osd_state = MLV_PLAY_MENU_FADEIN;
     mlv_play_osd_item = 1;
     mlv_play_paused = 0;   
     

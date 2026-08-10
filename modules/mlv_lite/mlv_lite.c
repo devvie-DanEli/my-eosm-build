@@ -2192,6 +2192,22 @@ int raw_video_touch_hit(int x, int y)
     return 1;
 }
 
+#ifdef CONFIG_EOSM
+/* True while the RAW LV request is changing state.  H.264 recording must not
+ * be allowed to start while the old RAW recorder/buffer state is still being
+ * released.  This is deliberately based on the real raw_lv state, not a
+ * fixed sleep, because the EOS M transition time is not deterministic. */
+static volatile int raw_video_transition_pending = 0;
+
+int raw_video_transition_busy(void)
+{
+    if (!lv || !is_movie_mode())
+        return 0;
+
+    return raw_video_transition_pending;
+}
+#endif
+
 static REQUIRES(ShootTask) EXCLUDES(settings_sem)
 unsigned int raw_rec_polling_cbr(unsigned int unused)
 {
@@ -2202,17 +2218,42 @@ unsigned int raw_rec_polling_cbr(unsigned int unused)
     raw_lv_request_update();
 
     /* Keep Crop Mood's EOS M state synchronized even when RAW is changed from
-     * the ML menu/settings instead of the LiveView touch target.
-     * This code is compiled only for EOS M; the old generic mlv_lite code
-     * does not provide an is_EOSM variable. */
+     * the ML menu/settings instead of the LiveView touch target.  Most
+     * importantly, do not touch crop_rec until the underlying Canon RAW LV
+     * request has actually reached the requested state.  The ASSERT seen on
+     * EOS M was in raw_rec_task/reset_buffer_slots(), where raw_info.buffer
+     * was already changing while Crop Mood was being torn down. */
 #ifdef CONFIG_EOSM
     if (last_raw_video_enabled != raw_video_enabled)
     {
-        if (!raw_video_enabled && crop_rec_disable_for_h264)
-            crop_rec_disable_for_h264();
-        else if (raw_video_enabled && crop_rec_enable_for_raw)
-            crop_rec_enable_for_raw();
+        raw_video_transition_pending = 1;
         last_raw_video_enabled = raw_video_enabled;
+    }
+
+    if (raw_video_transition_pending)
+    {
+        int requested = raw_video_enabled && lv && is_movie_mode();
+        int actual = raw_lv_is_enabled();
+
+        if (requested == actual)
+        {
+            if (!requested)
+            {
+                /* RAW has really been released. Only now disable Crop Mood and
+                 * restore the normal H.264 preview. */
+                if (crop_rec_disable_for_h264)
+                    crop_rec_disable_for_h264();
+                raw_video_transition_pending = 0;
+            }
+            else
+            {
+                /* RAW is really live. Only now allow Crop Mood to re-enter its
+                 * EOS M RAW-only pipeline. */
+                if (crop_rec_enable_for_raw)
+                    crop_rec_enable_for_raw();
+                raw_video_transition_pending = 0;
+            }
+        }
     }
 #endif
 
