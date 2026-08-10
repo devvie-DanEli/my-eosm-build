@@ -2818,6 +2818,8 @@ static LVINFO_UPDATE_FUNC(disp_preset_update)
     }
 }
 
+static int (*raw_video_is_enabled)() = MODULE_FUNCTION(raw_video_is_enabled);
+
 static LVINFO_UPDATE_FUNC(picq_update)
 {
     LVINFO_BUFFER(16);
@@ -2844,17 +2846,16 @@ static LVINFO_UPDATE_FUNC(picq_update)
         );
     }
     
-    int raw_lv = raw_lv_is_enabled();
-    if (raw_lv)
+    /* EOS M slim: use the normal Pic Quality item as the single RAW/H.264
+     * status indicator in movie Live View.  The old mlv_lite RAW badge was a
+     * second, fixed-position item and could collide with the audio/other
+     * LiveView overlays.  Green means RAW video is armed; red means Canon
+     * H.264 recording is selected. */
+    if (is_movie_mode())
     {
-        /* make it obvious that LiveView is in RAW mode */
-        /* (primarily for troubleshooting the raw backend, proper raw_lv_request/release calls and Magic Zoom slowdowns) */
-        if (is_movie_mode())
-        {
-            /* todo: icon? */
-            snprintf(buffer, sizeof(buffer), "RAW");
-        }
-        item->color_fg = raw_lv == 1 ? COLOR_GREEN1 : COLOR_GRAY(20);
+        int raw_on = raw_video_is_enabled && raw_video_is_enabled();
+        snprintf(buffer, sizeof(buffer), "RAW");
+        item->color_fg = raw_on ? COLOR_GREEN1 : COLOR_RED;
     }
 }
 

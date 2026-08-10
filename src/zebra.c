@@ -5351,14 +5351,14 @@ static void eosm_restore_canon_playback_ui()
 
     if (is_movie_mode())
     {
-        /* Movie clip review: bring back ML's own playback screen
-         * (zebra/histogram/etc drawn over the frame) instead of leaving
-         * it plain Canon. Nav (prev/next) and delete still work as
-         * normal, since Canon's own front buffer/dialog handling was
-         * just restored above - ML's overlay simply draws on top of it,
-         * same as it always has for the toggle button/QuickReview path. */
+        /* EOS M movie review needs Canon's native playback chrome for
+         * previous/next, Exact/All and Delete.  Do not immediately start
+         * draw_overlays_playback here: that routine clears the bitmap mirror
+         * and can cover the Canon playback controls before they are visible.
+         * The normal playback toggle remains available for explicit overlay
+         * use through the existing event path. */
+        overlays_playback_clear();
         overlays_playback_displayed = 0;
-        overlays_playback_toggle();
     }
 }
 #endif

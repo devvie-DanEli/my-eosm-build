@@ -864,6 +864,52 @@ int lvinfo_touch_is_bar_area(int y)
            (y >= bottom_y - 20 && y < bottom_y + 52);
 }
 
+int lvinfo_touch_item_hit(const char *name, int x, int y)
+{
+    if (!name || !lvinfo_sem)
+        return 0;
+
+    int hit = 0;
+    take_semaphore(lvinfo_sem, 0);
+
+    int top_y = get_ml_topbar_pos();
+    int bottom_y = get_ml_bottombar_pos();
+    struct lvinfo_item **items = 0;
+    int count = 0;
+
+    if (y >= top_y - 20 && y < top_y + 52)
+    {
+        items = top_items;
+        count = top_count;
+    }
+    else if (y >= bottom_y - 20 && y < bottom_y + 52)
+    {
+        items = bot_items;
+        count = bot_count;
+    }
+
+    if (items)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            struct lvinfo_item *item = items[i];
+            if (!is_active(item) || strcmp(item->name, name))
+                continue;
+
+            int left = item->x - item->width / 2 - 40;
+            int right = item->x + item->width / 2 + 40;
+            if (x >= left && x <= right)
+            {
+                hit = 1;
+                break;
+            }
+        }
+    }
+
+    give_semaphore(lvinfo_sem);
+    return hit;
+}
+
 void lvinfo_touch_editor_open(enum lvinfo_touch_field field)
 {
     lvinfo_touch_field = field;

@@ -164,6 +164,7 @@ static const char * aspect_ratio_choices[] =       {"5:1","4:1","3:1","2.67:1","
 /* config variables */
 
 CONFIG_INT("raw.video.enabled", raw_video_enabled, 1);
+static void (*crop_rec_disable_for_h264)(void) = MODULE_FUNCTION(crop_rec_disable_for_h264);
 
 /* Card spanning */
 static CONFIG_INT("raw.card_spanning", card_spanning, 0);
@@ -2161,52 +2162,33 @@ void show_recording_status()
     }
 }
 
-/* "RAW" armed-status badge, touchable in Live View.
- *
- * Only relevant in movie mode; shows whether RAW video will be used the
- * next time recording starts. Not drawn (and not touch-hittable) while
- * actually recording - show_recording_status() already covers that case
- * with its own indicator. */
-static int raw_badge_x, raw_badge_y, raw_badge_w, raw_badge_h;
-static int raw_badge_valid = 0;
-
-static void raw_video_badge_draw(void)
+/* Single RAW/H.264 status is drawn by the normal LiveView "Pic Quality"
+ * info item (src/lens.c).  Keep the touch action here, but hit-test against
+ * that dynamically laid-out item so it never creates a second RAW label. */
+int raw_video_is_enabled(void)
 {
-    if (!lv || !is_movie_mode() || gui_menu_shown() || !RAW_IS_IDLE ||
-        !get_global_draw() || !liveview_display_idle())
-    {
-        raw_badge_valid = 0;
-        return;
-    }
-
-    const char *label = raw_video_enabled ? "RAW" : "raw";
-    int color = raw_video_enabled ? COLOR_RED : COLOR_GRAY(40);
-    int x = 8;
-    int y = 8;
-
-    int w = bmp_string_width(FONT_MED, label);
-    bmp_printf(FONT(FONT_MED, color, COLOR_BG_DARK), x, y, "%s", label);
-
-    raw_badge_x = x;
-    raw_badge_y = y;
-    raw_badge_w = w;
-    raw_badge_h = font_med.height;
-    raw_badge_valid = 1;
+    return raw_video_enabled ? 1 : 0;
 }
 
-/* Weak-linked from gui-common.c (core) via MODULE_FUNCTION; returns 1 if
- * the tap landed on the badge and the toggle was handled. */
 int raw_video_touch_hit(int x, int y)
 {
-    if (!raw_badge_valid)
+    extern int lvinfo_touch_item_hit(const char *name, int x, int y);
+
+    if (!lv || !is_movie_mode() || RECORDING || gui_menu_shown())
         return 0;
-    if (x < raw_badge_x - 6 || x >= raw_badge_x + raw_badge_w + 6 ||
-        y < raw_badge_y - 6 || y >= raw_badge_y + raw_badge_h + 6)
+    if (!lvinfo_touch_item_hit("Pic Quality", x, y))
         return 0;
 
     raw_video_enabled = !raw_video_enabled;
-    raw_badge_valid = 0; /* redraw at the new state next poll */
+
+    /* Switching RAW -> H.264 must tear down crop-rec's RAW-only patch state
+     * before Canon's next video configuration is used.  Switching back to
+     * RAW leaves the existing crop configuration available for the user. */
+    if (!raw_video_enabled && crop_rec_disable_for_h264)
+        crop_rec_disable_for_h264();
+
     lens_display_set_dirty();
+    redraw();
     return 1;
 }
 
@@ -2216,12 +2198,6 @@ unsigned int raw_rec_polling_cbr(unsigned int unused)
     if (!compress_mq) return 0;
 
     raw_lv_request_update();
-
-    /* Draw/update the touchable "RAW" badge unconditionally here, before
-     * the early-return below - it must still show (in its dim "off"
-     * state) even when raw_video_enabled is off, otherwise there'd be
-     * no way to see it or tap it back on. */
-    raw_video_badge_draw();
 
     /* auto-disable raw video in photo mode or outside LiveView */
     int raw_video_active = raw_video_enabled && lv && is_movie_mode();

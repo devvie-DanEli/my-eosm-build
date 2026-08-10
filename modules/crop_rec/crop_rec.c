@@ -63,6 +63,12 @@ static CONFIG_INT("crop.preset_fps", crop_preset_fps_reduce, 1);
 static CONFIG_INT("crop.preset", crop_preset_index, 2);
 static CONFIG_INT("crop.shutter_range", shutter_range, 0);
 static CONFIG_INT("crop.fix_dual_iso_flicker", fix_dual_iso_flicker, 1);
+static int (*raw_video_is_enabled)(void) = MODULE_FUNCTION(raw_video_is_enabled);
+
+static int crop_raw_mode_available(void)
+{
+    return !is_EOSM || !raw_video_is_enabled || raw_video_is_enabled();
+}
 
 CONFIG_INT("crop.bit_depth", bit_depth_analog, 1);
 #define OUTPUT_14BIT (bit_depth_analog == 0)
@@ -5047,6 +5053,37 @@ static void uninstall_patches()
         }
 }
 
+static void update_patch(void);
+
+/* Force the RAW-only crop pipeline back to Canon's normal H.264 preview.
+ * Called by mlv_lite when the user switches the single RAW/H.264 indicator
+ * to H.264.  Do not alter the user's other crop preferences; just deactivate
+ * the currently active preset and restore x1/default LV geometry. */
+void crop_rec_disable_for_h264(void)
+{
+#ifdef CONFIG_EOSM
+    if (!is_EOSM)
+        return;
+
+    crop_preset_index = 0;
+    crop_preset = CROP_PRESET_OFF;
+    slim_mode_ui = 0;
+    slim_unified_preset = 0;
+
+    update_patch();
+
+    if (lv && is_movie_mode() && !RECORDING)
+    {
+        set_zoom(1);
+    }
+
+    crop_set_dirty(10);
+    vram_params_set_dirty();
+    lens_display_set_dirty();
+    redraw();
+#endif
+}
+
 static void update_patch()
 {
     if (CROP_PRESET_MENU)
@@ -5144,6 +5181,13 @@ static int pic_quality_warning = 0;
 
 static MENU_UPDATE_FUNC(crop_update)
 {
+    if (!crop_raw_mode_available())
+    {
+        MENU_SET_VALUE("OFF (RAW only)");
+        MENU_SET_ENABLED(0);
+        return;
+    }
+
     if (is_DIGIC_5)
     {
         /* reveal options for the current crop mode (1:1, 1x3 and 3x3) */
