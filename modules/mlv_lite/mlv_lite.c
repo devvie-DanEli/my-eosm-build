@@ -2182,19 +2182,10 @@ int raw_video_touch_hit(int x, int y)
 
     raw_video_enabled = !raw_video_enabled;
 
-    /*
-     * RAW -> H.264: mark Crop Mood inactive and let the normal LV transition
-     * remove its hardware hooks. Do not touch crop registers directly from
-     * the GUI task.
-     *
-     * H.264 -> RAW: release the H.264-only UI state so the user's stored RAW
-     * crop configuration becomes available again.
-     */
-    if (!raw_video_enabled && crop_rec_disable_for_h264)
-        crop_rec_disable_for_h264();
-    else if (raw_video_enabled && crop_rec_enable_for_raw)
-        crop_rec_enable_for_raw();
-
+    /* Do not tear down or install RAW/crop hardware from the GUI task.
+     * raw_rec_polling_cbr() runs in ShootTask and performs the RAW LV request
+     * transition first; Crop Mood follows only after raw_lv_is_enabled() has
+     * reached the requested state. */
     lens_display_set_dirty();
     redraw_after(300);
     redraw();
