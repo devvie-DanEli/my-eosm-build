@@ -5331,53 +5331,11 @@ static void overlays_playback_toggle()
     }
 }
 
-#ifdef CONFIG_EOSM
-/* EOS M video LV normally keeps Canon's bitmap/front buffer suppressed for ML.
- * When the user enters Canon playback, however, the stock playback controls
- * (including previous/next, exact/all, and delete) must be allowed to draw -
- * needed in both photo and movie review, since they live in the same Canon
- * front buffer that's suppressed during movie LiveView.
- * Restore that state after Canon has completed the PLAY transition. */
-static void eosm_restore_canon_playback_ui()
-{
-    if (!PLAY_MODE)
-        return;
-
-    extern int kill_canon_gui_mode;
-    kill_canon_gui_mode = 0;
-    canon_gui_enable_front_buffer(0);
-    bmp_on();
-    redraw();
-
-    if (is_movie_mode())
-    {
-        /* EOS M movie review needs Canon's native playback chrome for
-         * previous/next, Exact/All and Delete.  Do not immediately start
-         * draw_overlays_playback here: that routine clears the bitmap mirror
-         * and can cover the Canon playback controls before they are visible.
-         * The normal playback toggle remains available for explicit overlay
-         * use through the existing event path. */
-        overlays_playback_clear();
-        overlays_playback_displayed = 0;
-    }
-}
-#endif
-
 int handle_overlays_playback(struct event * event)
 {
     // enable LiveV stuff in Play mode
     if (PLAY_OR_QR_MODE)
     {
-#ifdef CONFIG_EOSM
-        /* PLAY is asynchronous on EOS M. The movie LiveView path may have left
-         * Canon's front buffer disabled, which makes the native playback
-         * navigation/delete strip disappear. Re-enable it only after Canon has
-         * entered PLAY; if PLAY is being used to leave playback, the callback
-         * safely does nothing. */
-        if (event->param == BGMT_PLAY && !IS_FAKE(event))
-            delayed_call(800, eosm_restore_canon_playback_ui, 0);
-#endif
-
         switch(event->param)
         {
 #if defined(BTN_ZEBRAS_FOR_PLAYBACK) && defined(BTN_ZEBRAS_FOR_PLAYBACK_NAME)
